@@ -93,6 +93,7 @@ describe("ElectronWindow", () => {
         transparent: false,
         backgroundColor: "#101010",
         backgroundMaterial: "mica",
+        vibrancy: null,
         webPreferences: {
           preload: "/tmp/preload.js",
           partition: "persist:t3code-preview-test",

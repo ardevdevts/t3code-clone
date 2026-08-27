@@ -82,6 +82,46 @@ describe("ClientSettings glass opacity", () => {
   });
 });
 
+describe("ClientSettings window background material", () => {
+  it("defaults to the platform default material", () => {
+    expect(decodeClientSettings({}).windowBackgroundMaterial).toBe("auto");
+  });
+
+  it.each([
+    "auto",
+    "solid",
+    "mica",
+    "acrylic",
+    "tabbed",
+    "titlebar",
+    "selection",
+    "menu",
+    "popover",
+    "sidebar",
+    "header",
+    "sheet",
+    "window",
+    "hud",
+    "fullscreen-ui",
+    "tooltip",
+    "content",
+    "under-window",
+    "under-page",
+  ])("accepts the %s material", (value) => {
+    expect(decodeClientSettings({ windowBackgroundMaterial: value }).windowBackgroundMaterial).toBe(
+      value,
+    );
+    expect(
+      decodeClientSettingsPatch({ windowBackgroundMaterial: value }).windowBackgroundMaterial,
+    ).toBe(value);
+  });
+
+  it("rejects unknown materials", () => {
+    expect(() => decodeClientSettings({ windowBackgroundMaterial: "glass" })).toThrow();
+    expect(() => decodeClientSettingsPatch({ windowBackgroundMaterial: "glass" })).toThrow();
+  });
+});
+
 describe("ClientSettings appearance contrast", () => {
   it("defaults to the theme's original contrast", () => {
     expect(decodeClientSettings({}).appearanceContrast).toBe(100);

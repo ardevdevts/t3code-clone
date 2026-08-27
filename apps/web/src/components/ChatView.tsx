@@ -6828,7 +6828,7 @@ function ChatViewContent(props: ChatViewProps) {
     Boolean(revealedThreadSyncPhase && !activeEnvironmentUnavailable);
 
   return (
-    <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background/60">
+    <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
       {rightPanelOpen && !shouldUseRightPanelSheet ? panelLayoutControls : null}
       <div
         className={cn(

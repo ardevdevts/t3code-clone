@@ -83,6 +83,57 @@ export const AppearanceContrast = Schema.Int.check(
 );
 export type AppearanceContrast = typeof AppearanceContrast.Type;
 export const DEFAULT_APPEARANCE_CONTRAST: AppearanceContrast = 100;
+
+/**
+ * Window backdrop material for the desktop shell. Only the Electron host
+ * consumes this; web clients persist it but never apply it.
+ *
+ * - `auto` — the platform default (Mica on Windows 11, solid elsewhere).
+ * - `solid` — explicit opt-out: a plain solid background color, no material.
+ * - Windows 11 DWM materials: `mica`, `acrylic`, `tabbed`.
+ * - macOS vibrancy materials: `under-window`, `under-page`, and the
+ *   NSVisualEffectView styles (`titlebar`, `sidebar`, `hud`, ...).
+ *
+ * The shell resolves the value against its platform and falls back to the
+ * solid background for anything it cannot draw.
+ */
+export const WindowBackgroundMaterial = Schema.Literals([
+  "auto",
+  "solid",
+  "mica",
+  "acrylic",
+  "tabbed",
+  "titlebar",
+  "selection",
+  "menu",
+  "popover",
+  "sidebar",
+  "header",
+  "sheet",
+  "window",
+  "hud",
+  "fullscreen-ui",
+  "tooltip",
+  "content",
+  "under-window",
+  "under-page",
+]);
+export type WindowBackgroundMaterial = typeof WindowBackgroundMaterial.Type;
+export const DEFAULT_WINDOW_BACKGROUND_MATERIAL: WindowBackgroundMaterial = "auto";
+
+export const isWindowsWindowBackgroundMaterial = (
+  value: WindowBackgroundMaterial,
+): value is "auto" | "solid" | "mica" | "acrylic" | "tabbed" =>
+  value === "auto" ||
+  value === "solid" ||
+  value === "mica" ||
+  value === "acrylic" ||
+  value === "tabbed";
+
+export const isMacWindowBackgroundMaterial = (
+  value: WindowBackgroundMaterial,
+): value is Exclude<WindowBackgroundMaterial, "auto" | "solid" | "mica" | "acrylic" | "tabbed"> =>
+  !isWindowsWindowBackgroundMaterial(value);
 /**
  * Font size preferences, in CSS pixels. The ranges are deliberately narrow:
  * the interface size scales every rem-based dimension in the app, so the
@@ -255,6 +306,9 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
   ),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  windowBackgroundMaterial: WindowBackgroundMaterial.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WINDOW_BACKGROUND_MATERIAL)),
+  ),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
@@ -952,5 +1006,6 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   wordWrap: Schema.optionalKey(Schema.Boolean),
+  windowBackgroundMaterial: Schema.optionalKey(WindowBackgroundMaterial),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

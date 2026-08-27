@@ -22,6 +22,7 @@ const ElectronWindowCreateOptions = Schema.Struct({
   transparent: Schema.NullOr(Schema.Boolean),
   backgroundColor: Schema.NullOr(Schema.String),
   backgroundMaterial: Schema.NullOr(Schema.String),
+  vibrancy: Schema.NullOr(Schema.String),
   webPreferences: Schema.Struct({
     preload: Schema.NullOr(Schema.String),
     partition: Schema.NullOr(Schema.String),
@@ -181,6 +182,7 @@ export const make = Effect.gen(function* () {
         transparent: options.transparent ?? null,
         backgroundColor: options.backgroundColor ?? null,
         backgroundMaterial: options.backgroundMaterial ?? null,
+        vibrancy: options.vibrancy ?? null,
         webPreferences: {
           preload: webPreferences?.preload ?? null,
           partition: webPreferences?.partition ?? null,

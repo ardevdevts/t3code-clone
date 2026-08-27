@@ -565,14 +565,16 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   body {
     background-color: var(--app-chrome-background);
   }
-  /* Windows desktop (Mica): the DWM draws a translucent backdrop behind the
-     frameless window. The root chrome stays fully transparent; each surface
-     carries its own translucent tint (remixed at the end of this file) so the
-     material reads through a single layer — stacking tints here is what made
-     the window look solid. !important wins over the boot-time and theme-sync
-     inline colors. */
+  /* Desktop system backdrops (Windows Mica/Acrylic/Tabbed, macOS vibrancy):
+     the OS draws a translucent material behind the window. The root chrome
+     stays fully transparent; each surface carries its own translucent tint
+     (remixed at the end of this file) so the material reads through a single
+     layer — stacking tints here is what made the window look solid.
+     !important wins over the boot-time and theme-sync inline colors. */
   html.electron-windows,
-  html.electron-windows body {
+  html.electron-windows body,
+  html.electron-macos,
+  html.electron-macos body {
     background-color: transparent !important;
   }
   body {
@@ -1645,6 +1647,21 @@ html[data-theme-id] [data-app-sidebar] {
 
   @variant dark {
     border-color: color-mix(in srgb, var(--contrast-sidebar-foreground) 8%, transparent);
+    --sidebar-row-hover: color-mix(
+      in srgb,
+      var(--app-theme-sidebar-row-hover) var(--glass-opacity),
+      transparent
+    );
+    --sidebar-row-active: color-mix(
+      in srgb,
+      var(--app-theme-sidebar-row-active) var(--glass-opacity),
+      transparent
+    );
+    --sidebar-row-selected: color-mix(
+      in srgb,
+      var(--app-theme-sidebar-row-selected) var(--glass-opacity),
+      transparent
+    );
   }
 }
 
@@ -2310,80 +2327,89 @@ code {
   }
 }
 
-/* Windows desktop (Mica): the DWM draws a translucent backdrop behind the
-   frameless window, and the root chrome is transparent (see the base layer),
-   so the material is only ever one translucent tint away. Remix the base
-   surfaces translucent so the sidebar, titlebar, and workspace panels all
-   tint through to the material; overlays (dialogs, popovers) keep their own
-   --card/--popover paints. Unlayered so these beat every palette block above;
-   light-dark() follows the .dark class for the built-in palettes. Tune the
-   tint with --mica-surface-opacity. */
-html.electron-windows {
-  --mica-surface-opacity: 75%;
+/* Desktop system backdrops (Windows Mica/Acrylic/Tabbed, macOS vibrancy): the
+   OS draws a translucent material behind the frameless window, and the root
+   chrome is transparent (see the base layer), so the material is only ever one
+   translucent tint away. Remix the base surfaces translucent so the sidebar,
+   titlebar, and workspace panels all tint through to the material; overlays
+   (dialogs, popovers) keep their own --card/--popover paints. Unlayered so
+   these beat every palette block above; light-dark() follows the .dark class
+   for the built-in palettes. Tune the tint with --backdrop-surface-opacity. */
+html:is(.electron-windows, .electron-macos) {
+  --backdrop-surface-opacity: 75%;
   --background: color-mix(
     in srgb,
-    light-dark(var(--color-zinc-25), var(--color-neutral-950)) var(--mica-surface-opacity),
+    light-dark(var(--color-zinc-25), var(--color-neutral-950)) var(--backdrop-surface-opacity),
     transparent
   );
   --app-chrome-background: color-mix(
     in srgb,
-    light-dark(var(--color-zinc-25), var(--color-neutral-950)) var(--mica-surface-opacity),
+    light-dark(var(--color-zinc-25), var(--color-neutral-950)) var(--backdrop-surface-opacity),
     transparent
   );
   --sidebar: color-mix(
     in srgb,
-    light-dark(var(--color-zinc-50), var(--color-neutral-950)) var(--mica-surface-opacity),
+    light-dark(var(--color-zinc-50), var(--color-neutral-950)) var(--backdrop-surface-opacity),
     transparent
   );
   --toolbar-background: color-mix(
     in srgb,
-    light-dark(var(--color-zinc-25), var(--color-neutral-950)) var(--mica-surface-opacity),
+    light-dark(var(--color-zinc-25), var(--color-neutral-950)) var(--backdrop-surface-opacity),
     transparent
   );
 }
 
 /* The sidebar owns a local palette that re-paints these roles solid on the
    sidebar element itself; remix them there too so the sidebar tints through. */
-html.electron-windows [data-app-sidebar] {
+html:is(.electron-windows, .electron-macos) [data-app-sidebar] {
   --background: color-mix(
     in srgb,
-    light-dark(var(--color-zinc-25), var(--color-neutral-950)) var(--mica-surface-opacity),
+    light-dark(var(--color-zinc-25), var(--color-neutral-950)) var(--backdrop-surface-opacity),
     transparent
   );
   --sidebar: color-mix(
     in srgb,
-    light-dark(var(--color-zinc-50), var(--color-neutral-950)) var(--mica-surface-opacity),
+    light-dark(var(--color-zinc-50), var(--color-neutral-950)) var(--backdrop-surface-opacity),
     transparent
   );
   --sidebar-stage-fade: var(--sidebar);
 }
 
-html.electron-windows[data-theme-id]:not([data-theme-id=""]) {
+html:is(.electron-windows, .electron-macos)[data-theme-id]:not([data-theme-id=""]) {
   --background: color-mix(
     in srgb,
-    var(--app-theme-canvas) var(--mica-surface-opacity),
+    var(--app-theme-canvas) var(--backdrop-surface-opacity),
     transparent
   );
   --app-chrome-background: color-mix(
     in srgb,
-    var(--app-theme-chrome) var(--mica-surface-opacity),
+    var(--app-theme-chrome) var(--backdrop-surface-opacity),
     transparent
   );
-  --sidebar: color-mix(in srgb, var(--app-theme-sidebar) var(--mica-surface-opacity), transparent);
+  --sidebar: color-mix(
+    in srgb,
+    var(--app-theme-sidebar) var(--backdrop-surface-opacity),
+    transparent
+  );
   --toolbar-background: color-mix(
     in srgb,
-    var(--app-theme-toolbar) var(--mica-surface-opacity),
+    var(--app-theme-toolbar) var(--backdrop-surface-opacity),
     transparent
   );
 }
 
-html.electron-windows[data-theme-id]:not([data-theme-id=""]) [data-app-sidebar] {
+html:is(.electron-windows, .electron-macos)[data-theme-id]:not([data-theme-id=""])
+  [data-app-sidebar] {
   --background: color-mix(
     in srgb,
-    var(--app-theme-canvas) var(--mica-surface-opacity),
+    var(--app-theme-canvas) var(--backdrop-surface-opacity),
     transparent
   );
-  --sidebar: color-mix(in srgb, var(--app-theme-sidebar) var(--mica-surface-opacity), transparent);
+  --sidebar: color-mix(
+    in srgb,
+    var(--app-theme-sidebar) var(--backdrop-surface-opacity),
+    transparent
+  );
   --sidebar-stage-fade: var(--sidebar);
 }
 
@@ -2392,7 +2418,7 @@ html.electron-windows[data-theme-id]:not([data-theme-id=""]) [data-app-sidebar] 
    Keeping those parent layers would stack a second tint on the material and
    read as opaque; drop them so every column shows the backdrop through its
    single surface layer. */
-html.electron-windows [data-slot="sidebar-inset"],
-html.electron-windows [data-chat-header] {
+html:is(.electron-windows, .electron-macos) [data-slot="sidebar-inset"],
+html:is(.electron-windows, .electron-macos) [data-chat-header] {
   background-color: transparent;
 }

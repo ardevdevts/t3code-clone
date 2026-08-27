@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import { DEFAULT_CLIENT_SETTINGS, type ClientSettings } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -105,6 +106,7 @@ function makeFakeBrowserWindow() {
     restore: vi.fn(),
     setBackgroundColor: vi.fn(),
     setBackgroundMaterial: vi.fn(),
+    setVibrancy: vi.fn(),
     setAutoHideCursor: vi.fn(),
     setTitle: vi.fn(),
     setTitleBarOverlay: vi.fn(),
@@ -130,6 +132,7 @@ function makeFakeBrowserWindow() {
     setAutoHideCursor: window.setAutoHideCursor,
     setBackgroundColor: window.setBackgroundColor,
     setBackgroundMaterial: window.setBackgroundMaterial,
+    setVibrancy: window.setVibrancy,
     webContentsListeners,
     windowListeners,
   };
@@ -202,6 +205,7 @@ function makeTestLayer(input: {
   readonly createdWindowOptions?: Electron.BrowserWindowConstructorOptions[];
   readonly environment?: DesktopEnvironment.MakeDesktopEnvironmentInput;
   readonly desktopSettings?: DesktopAppSettings.DesktopSettings;
+  readonly clientSettings?: Option.Option<ClientSettings>;
   readonly mainWindowBoundsUpdates?: DesktopAppSettings.DesktopWindowBounds[];
   readonly mainWindowMaximizedUpdates?: boolean[];
   readonly beforeMainWindowBoundsUpdate?: (
@@ -281,7 +285,11 @@ function makeTestLayer(input: {
         desktopAssetsLayer,
         environmentLayer,
         desktopAppSettingsLayer,
-        desktopClientSettingsLayer,
+        input.clientSettings !== undefined
+          ? Layer.mock(DesktopClientSettings.DesktopClientSettings)({
+              get: Effect.succeed(input.clientSettings),
+            })
+          : desktopClientSettingsLayer,
         desktopServerExposureLayer,
         DesktopState.layer,
         electronAppLayer,
@@ -354,6 +362,7 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
                 transparent: null,
                 backgroundColor: null,
                 backgroundMaterial: null,
+                vibrancy: null,
                 webPreferences: {
                   preload: null,
                   partition: null,
@@ -1254,22 +1263,91 @@ describe("DesktopWindow", () => {
   );
 
   describe("resolveWindowBackgroundMaterial", () => {
-    it("enables Mica on Windows 11 22H2+ builds", () => {
-      assert.equal(DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.22621"), "mica");
-      assert.equal(DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.22631"), "mica");
-      assert.equal(DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.26100"), "mica");
+    it("enables Mica by default on Windows 11 22H2+ builds", () => {
+      assert.deepEqual(
+        DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.22621", "auto"),
+        { _tag: "material", material: "mica" },
+      );
+      assert.deepEqual(
+        DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.22631", "auto"),
+        { _tag: "material", material: "mica" },
+      );
+      assert.deepEqual(
+        DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.26100", "auto"),
+        { _tag: "material", material: "mica" },
+      );
+    });
+
+    it("applies each Windows 11 material when supported by the build", () => {
+      assert.deepEqual(
+        DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.22631", "mica"),
+        { _tag: "material", material: "mica" },
+      );
+      assert.deepEqual(
+        DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.22631", "acrylic"),
+        { _tag: "material", material: "acrylic" },
+      );
+      assert.deepEqual(
+        DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.22631", "tabbed"),
+        { _tag: "material", material: "tabbed" },
+      );
+    });
+
+    it("keeps the solid fallback for explicit opt-outs and unsupported materials", () => {
+      assert.deepEqual(
+        DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.22631", "solid"),
+        { _tag: "solid" },
+      );
+      assert.deepEqual(
+        DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.22631", "under-window"),
+        { _tag: "solid" },
+      );
     });
 
     it("keeps the solid fallback on older or malformed Windows builds", () => {
-      assert.isUndefined(DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.22000"));
-      assert.isUndefined(DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.19045"));
-      assert.isUndefined(DesktopWindow.resolveWindowBackgroundMaterial("win32", ""));
-      assert.isUndefined(DesktopWindow.resolveWindowBackgroundMaterial("win32", "not-a-version"));
+      assert.deepEqual(
+        DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.22000", "auto"),
+        { _tag: "solid" },
+      );
+      assert.deepEqual(
+        DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.19045", "mica"),
+        { _tag: "solid" },
+      );
+      assert.deepEqual(DesktopWindow.resolveWindowBackgroundMaterial("win32", "", "auto"), {
+        _tag: "solid",
+      });
+      assert.deepEqual(
+        DesktopWindow.resolveWindowBackgroundMaterial("win32", "not-a-version", "auto"),
+        { _tag: "solid" },
+      );
     });
 
-    it("never enables Mica off Windows", () => {
-      assert.isUndefined(DesktopWindow.resolveWindowBackgroundMaterial("darwin", "10.0.22631"));
-      assert.isUndefined(DesktopWindow.resolveWindowBackgroundMaterial("linux", "10.0.22631"));
+    it("maps macOS vibrancy materials and falls back to solid otherwise", () => {
+      assert.deepEqual(
+        DesktopWindow.resolveWindowBackgroundMaterial("darwin", "24.0.0", "under-window"),
+        { _tag: "vibrancy", vibrancy: "under-window" },
+      );
+      assert.deepEqual(
+        DesktopWindow.resolveWindowBackgroundMaterial("darwin", "24.0.0", "sidebar"),
+        { _tag: "vibrancy", vibrancy: "sidebar" },
+      );
+      assert.deepEqual(DesktopWindow.resolveWindowBackgroundMaterial("darwin", "24.0.0", "auto"), {
+        _tag: "solid",
+      });
+      assert.deepEqual(DesktopWindow.resolveWindowBackgroundMaterial("darwin", "24.0.0", "mica"), {
+        _tag: "solid",
+      });
+    });
+
+    it("never enables materials off Windows and macOS", () => {
+      assert.deepEqual(
+        DesktopWindow.resolveWindowBackgroundMaterial("linux", "10.0.22631", "mica"),
+        { _tag: "solid" },
+      );
+      assert.deepEqual(
+        DesktopWindow.resolveWindowBackgroundMaterial("linux", "10.0.22631", "under-window"),
+        { _tag: "solid" },
+      );
     });
   });
 
@@ -1303,6 +1381,102 @@ describe("DesktopWindow", () => {
       } finally {
         vi.unstubAllGlobals();
       }
+    }),
+  );
+
+  it.effect("honors an explicit solid material preference on Windows 11", () =>
+    Effect.gen(function* () {
+      vi.stubGlobal("process", { ...process, getSystemVersion: () => "10.0.22631" });
+      try {
+        const fakeWindow = makeFakeBrowserWindow();
+        const createCount = yield* Ref.make(0);
+        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+        const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
+        const layer = makeTestLayer({
+          window: fakeWindow.window,
+          createCount,
+          mainWindow,
+          createdWindowOptions,
+          environment: { ...environmentInput, platform: "win32" },
+          clientSettings: Option.some({
+            ...DEFAULT_CLIENT_SETTINGS,
+            windowBackgroundMaterial: "solid",
+          }),
+        });
+
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+          assert.equal(createdWindowOptions[0]?.backgroundColor, "#ffffff");
+          assert.isFalse("backgroundMaterial" in (createdWindowOptions[0] ?? {}));
+          yield* desktopWindow.syncAppearance;
+          assert.equal(fakeWindow.setBackgroundMaterial.mock.calls.length, 0);
+          assert.deepEqual(fakeWindow.setBackgroundColor.mock.calls, [["#ffffff"]]);
+        }).pipe(Effect.provide(layer));
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }),
+  );
+
+  it.effect("applies vibrancy to macOS main windows", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        createdWindowOptions,
+        clientSettings: Option.some({
+          ...DEFAULT_CLIENT_SETTINGS,
+          windowBackgroundMaterial: "under-window",
+        }),
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        assert.equal(createdWindowOptions[0]?.vibrancy, "under-window");
+        assert.equal(createdWindowOptions[0]?.backgroundColor, "#ffffff");
+        yield* desktopWindow.syncAppearance;
+        assert.deepEqual(fakeWindow.setVibrancy.mock.calls, [["under-window"]]);
+        assert.equal(fakeWindow.setBackgroundMaterial.mock.calls.length, 0);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("removes vibrancy on macOS when the material preference is solid", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        createdWindowOptions,
+        clientSettings: Option.some({
+          ...DEFAULT_CLIENT_SETTINGS,
+          windowBackgroundMaterial: "solid",
+        }),
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        assert.isFalse("vibrancy" in (createdWindowOptions[0] ?? {}));
+        assert.equal(createdWindowOptions[0]?.backgroundColor, "#ffffff");
+        yield* desktopWindow.syncAppearance;
+        assert.deepEqual(fakeWindow.setVibrancy.mock.calls, [[null]]);
+        assert.deepEqual(fakeWindow.setBackgroundColor.mock.calls, [["#ffffff"]]);
+      }).pipe(Effect.provide(layer));
     }),
   );
 

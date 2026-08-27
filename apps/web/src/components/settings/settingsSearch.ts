@@ -70,6 +70,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
   },
   {
+    // Desktop-only: the window backdrop is drawn by the OS on the Electron
+    // shell; browsers and Linux hosts have no material to pick.
+    id: "setting-window-material",
+    title: "Window material",
+    to: "/settings/appearance",
+    desktopOnly: true,
+  },
+  {
     id: "environment-identification",
     title: "Environment identification",
     to: "/settings/appearance",

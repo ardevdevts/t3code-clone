@@ -19,7 +19,9 @@ import {
 import {
   DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE,
   DEFAULT_UNIFIED_SETTINGS,
+  DEFAULT_WINDOW_BACKGROUND_MATERIAL,
   type EnvironmentIdentificationMode,
+  type WindowBackgroundMaterial,
   MAX_APPEARANCE_CONTRAST,
   MAX_CODE_FONT_SIZE,
   MAX_GLASS_OPACITY,
@@ -115,7 +117,15 @@ import {
   NumberFieldIncrement,
   NumberFieldInput,
 } from "../ui/number-field";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import {
+  Select,
+  SelectGroup,
+  SelectGroupLabel,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from "../ui/select";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -146,6 +156,7 @@ import {
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { resolveWindowMaterialChoices, WINDOW_MATERIAL_LABELS } from "../../lib/windowMaterial";
 
 const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
   artwork: "Artwork",
@@ -1005,6 +1016,14 @@ export function AppearanceSettingsPanel() {
     "--settings-slider-progress": `${appearanceContrastRatio * 100}%`,
     "--settings-slider-fill-offset": `${0.5 - appearanceContrastRatio}rem`,
   } as CSSProperties;
+  const windowMaterialChoices = useMemo(
+    () => (isElectron ? resolveWindowMaterialChoices(navigator.platform) : null),
+    [],
+  );
+  const vibrancyMaterialChoices = useMemo(
+    () => windowMaterialChoices?.filter((choice) => choice.group === "vibrancy") ?? [],
+    [windowMaterialChoices],
+  );
 
   return (
     <SettingsPageContainer>
@@ -1118,6 +1137,60 @@ export function AppearanceSettingsPanel() {
             </div>
           }
         />
+
+        {windowMaterialChoices !== null ? (
+          <SettingsRow
+            {...searchableSetting("setting-window-material")}
+            description="Choose what the operating system draws behind the window. The material shows through translucent surfaces."
+            resetAction={
+              settings.windowBackgroundMaterial !== DEFAULT_WINDOW_BACKGROUND_MATERIAL ? (
+                <SettingResetButton
+                  label="window material"
+                  onClick={() =>
+                    updateSettings({
+                      windowBackgroundMaterial: DEFAULT_WINDOW_BACKGROUND_MATERIAL,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Select
+                value={settings.windowBackgroundMaterial}
+                onValueChange={(value) => {
+                  if (value && windowMaterialChoices.some((choice) => choice.value === value)) {
+                    updateSettings({ windowBackgroundMaterial: value as WindowBackgroundMaterial });
+                  }
+                }}
+              >
+                <SelectTrigger className="w-full sm:w-44" aria-label="Window material">
+                  <SelectValue>
+                    {WINDOW_MATERIAL_LABELS[settings.windowBackgroundMaterial]}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  {windowMaterialChoices
+                    .filter((choice) => choice.group === undefined)
+                    .map((choice) => (
+                      <SelectItem hideIndicator key={choice.value} value={choice.value}>
+                        {choice.label}
+                      </SelectItem>
+                    ))}
+                  {vibrancyMaterialChoices.length > 0 ? (
+                    <SelectGroup>
+                      <SelectGroupLabel>Vibrancy</SelectGroupLabel>
+                      {vibrancyMaterialChoices.map((choice) => (
+                        <SelectItem hideIndicator key={choice.value} value={choice.value}>
+                          {choice.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  ) : null}
+                </SelectPopup>
+              </Select>
+            }
+          />
+        ) : null}
 
         {showEnvironmentIdentification ? (
           <SettingsRow

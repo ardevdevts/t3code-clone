@@ -8,7 +8,12 @@ import * as Ref from "effect/Ref";
 
 import * as Electron from "electron";
 
-import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts";
+import {
+  DEFAULT_CLIENT_SETTINGS,
+  isMacWindowBackgroundMaterial,
+  type ClientSettings,
+  type WindowBackgroundMaterial,
+} from "@t3tools/contracts";
 
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -130,28 +135,63 @@ function getInitialWindowBackgroundColor(shouldUseDarkColors: boolean): string {
 }
 
 // Windows 11 22H2 (build 22621) and later can draw DWM system backdrops
-// (Mica) behind frameless windows. Mica needs an opaque window: DWM draws no
-// backdrop into layered/transparent windows, so the renderer's own
-// translucent surfaces are what let the material show through. Older Windows
-// and other platforms keep the solid fallback background color so the window
-// never renders transparent.
+// (Mica, Acrylic, Tabbed) behind frameless windows. Backdrops need an opaque
+// window: DWM draws no backdrop into layered/transparent windows, so the
+// renderer's own translucent surfaces are what let the material show through.
+// Older Windows, macOS and Linux keep the solid fallback background color so
+// the window never renders transparent. macOS draws vibrancy materials the
+// same way — Electron applies them with setVibrancy and they show through the
+// same translucent surfaces.
 const MICA_MIN_WINDOWS_BUILD = 22621;
+
+type ResolvedWindowBackdrop =
+  | { readonly _tag: "material"; readonly material: "mica" | "acrylic" | "tabbed" }
+  | {
+      readonly _tag: "vibrancy";
+      readonly vibrancy:
+        | "titlebar"
+        | "selection"
+        | "menu"
+        | "popover"
+        | "sidebar"
+        | "header"
+        | "sheet"
+        | "window"
+        | "hud"
+        | "fullscreen-ui"
+        | "tooltip"
+        | "content"
+        | "under-window"
+        | "under-page";
+    }
+  | { readonly _tag: "solid" };
+
+const isWindowsBackdropMaterial = (
+  value: WindowBackgroundMaterial,
+): value is "mica" | "acrylic" | "tabbed" =>
+  value === "mica" || value === "acrylic" || value === "tabbed";
 
 export function resolveWindowBackgroundMaterial(
   platform: NodeJS.Platform,
   systemVersion: string,
-): "mica" | undefined {
-  if (platform !== "win32") {
-    return undefined;
+  preference: WindowBackgroundMaterial,
+): ResolvedWindowBackdrop {
+  if (platform === "win32") {
+    const build = Number(systemVersion.split(".")[2] ?? 0);
+    const supported = Number.isFinite(build) && build >= MICA_MIN_WINDOWS_BUILD;
+    if (supported && (preference === "auto" || isWindowsBackdropMaterial(preference))) {
+      return { _tag: "material", material: preference === "auto" ? "mica" : preference };
+    }
+    return { _tag: "solid" };
   }
-  const build = Number(systemVersion.split(".")[2] ?? 0);
-  return Number.isFinite(build) && build >= MICA_MIN_WINDOWS_BUILD ? "mica" : undefined;
+  if (platform === "darwin" && isMacWindowBackgroundMaterial(preference)) {
+    return { _tag: "vibrancy", vibrancy: preference };
+  }
+  return { _tag: "solid" };
 }
 
-function getWindowBackgroundMaterial(platform: NodeJS.Platform): "mica" | undefined {
-  const systemVersion =
-    typeof process.getSystemVersion === "function" ? process.getSystemVersion() : "";
-  return resolveWindowBackgroundMaterial(platform, systemVersion);
+function getSystemVersion(): string {
+  return typeof process.getSystemVersion === "function" ? process.getSystemVersion() : "";
 }
 
 type DisplayBounds = Pick<Electron.Rectangle, "x" | "y" | "width" | "height">;
@@ -253,27 +293,44 @@ function getWindowTitleBarOptions(
   };
 }
 
+function getWindowBackgroundMaterialPreference(
+  settings: Option.Option<ClientSettings>,
+): WindowBackgroundMaterial {
+  return Option.match(settings, {
+    onNone: () => DEFAULT_CLIENT_SETTINGS.windowBackgroundMaterial,
+    onSome: (clientSettings) => clientSettings.windowBackgroundMaterial,
+  });
+}
+
 function syncWindowAppearance(
   window: Electron.BrowserWindow,
   shouldUseDarkColors: boolean,
   platform: NodeJS.Platform,
-): Effect.Effect<void> {
-  return Effect.sync(() => {
-    if (window.isDestroyed()) {
-      return;
-    }
+  preference: WindowBackgroundMaterial,
+): void {
+  if (window.isDestroyed()) {
+    return;
+  }
 
-    const backgroundMaterial = getWindowBackgroundMaterial(platform);
-    if (backgroundMaterial === undefined) {
+  const backdrop = resolveWindowBackgroundMaterial(platform, getSystemVersion(), preference);
+  switch (backdrop._tag) {
+    case "material":
+      window.setBackgroundMaterial(backdrop.material);
+      break;
+    case "vibrancy":
+      window.setVibrancy(backdrop.vibrancy);
+      break;
+    case "solid":
+      if (platform === "darwin") {
+        window.setVibrancy(null);
+      }
       window.setBackgroundColor(getInitialWindowBackgroundColor(shouldUseDarkColors));
-    } else {
-      window.setBackgroundMaterial(backgroundMaterial);
-    }
-    const { titleBarOverlay } = getWindowTitleBarOptions(shouldUseDarkColors, platform);
-    if (typeof titleBarOverlay === "object") {
-      window.setTitleBarOverlay(titleBarOverlay);
-    }
-  });
+      break;
+  }
+  const { titleBarOverlay } = getWindowTitleBarOptions(shouldUseDarkColors, platform);
+  if (typeof titleBarOverlay === "object") {
+    window.setTitleBarOverlay(titleBarOverlay);
+  }
 }
 
 type RevealSubscription = (listener: () => void) => void;
@@ -352,7 +409,14 @@ export const make = Effect.gen(function* () {
     const applicationUrl = getDesktopUrl(environment.isDevelopment);
     const iconPaths = yield* assets.iconPaths;
     const iconOption = getIconOption(iconPaths, environment.platform);
-    const backgroundMaterial = getWindowBackgroundMaterial(environment.platform);
+    const backgroundMaterialPreference = getWindowBackgroundMaterialPreference(
+      yield* clientSettings.get,
+    );
+    const backdrop = resolveWindowBackgroundMaterial(
+      environment.platform,
+      getSystemVersion(),
+      backgroundMaterialPreference,
+    );
     const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
     const persistedSettings = yield* desktopSettings.get;
     const persistedBounds = persistedSettings.mainWindowBounds;
@@ -384,9 +448,14 @@ export const make = Effect.gen(function* () {
       show: false,
       autoHideMenuBar: true,
       ...(environment.platform === "darwin" ? { disableAutoHideCursor: true } : {}),
-      ...(backgroundMaterial === undefined
-        ? { backgroundColor: getInitialWindowBackgroundColor(shouldUseDarkColors) }
-        : { backgroundMaterial }),
+      ...(backdrop._tag === "material"
+        ? { backgroundMaterial: backdrop.material }
+        : backdrop._tag === "vibrancy"
+          ? {
+              vibrancy: backdrop.vibrancy,
+              backgroundColor: getInitialWindowBackgroundColor(shouldUseDarkColors),
+            }
+          : { backgroundColor: getInitialWindowBackgroundColor(shouldUseDarkColors) }),
       ...iconOption,
       title: environment.displayName,
       ...getWindowTitleBarOptions(shouldUseDarkColors, environment.platform),
@@ -943,8 +1012,11 @@ export const make = Effect.gen(function* () {
     }),
     syncAppearance: Effect.gen(function* () {
       const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
+      const preference = getWindowBackgroundMaterialPreference(yield* clientSettings.get);
       yield* electronWindow.syncAllAppearance((window) =>
-        syncWindowAppearance(window, shouldUseDarkColors, environment.platform),
+        Effect.sync(() =>
+          syncWindowAppearance(window, shouldUseDarkColors, environment.platform, preference),
+        ),
       );
     }).pipe(Effect.withSpan("desktop.window.syncAppearance")),
   });
