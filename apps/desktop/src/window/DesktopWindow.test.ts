@@ -1294,6 +1294,7 @@ describe("DesktopWindow", () => {
           yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
 
           assert.equal(createdWindowOptions[0]?.backgroundMaterial, "mica");
+          assert.isFalse("transparent" in (createdWindowOptions[0] ?? {}));
           assert.isFalse("backgroundColor" in (createdWindowOptions[0] ?? {}));
           yield* desktopWindow.syncAppearance;
           assert.deepEqual(fakeWindow.setBackgroundMaterial.mock.calls, [["mica"]]);
@@ -1327,6 +1328,7 @@ describe("DesktopWindow", () => {
 
           assert.equal(createdWindowOptions[0]?.backgroundColor, "#ffffff");
           assert.isFalse("backgroundMaterial" in (createdWindowOptions[0] ?? {}));
+          assert.isFalse("transparent" in (createdWindowOptions[0] ?? {}));
           yield* desktopWindow.syncAppearance;
           assert.deepEqual(fakeWindow.setBackgroundColor.mock.calls, [["#ffffff"]]);
           assert.equal(fakeWindow.setBackgroundMaterial.mock.calls.length, 0);

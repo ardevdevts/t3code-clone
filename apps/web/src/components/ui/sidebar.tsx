@@ -32,9 +32,11 @@ const SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH = 16 * 16;
 type SidebarContextProps = {
   state: ResponsiveSidebarState;
   open: boolean;
-  setOpen: (open: boolean) => void;
+  setOpen: (open: boolean | ((value: boolean) => boolean)) => void;
   openMobile: boolean;
   setOpenMobile: (open: boolean) => void;
+  transientOpen: boolean;
+  setTransientOpen: (open: boolean) => void;
   isMobile: boolean;
   toggleSidebar: () => void;
 };
@@ -87,8 +89,8 @@ function useSidebar() {
 }
 
 function useSidebarVisibility() {
-  const { isMobile, open, openMobile } = useSidebar();
-  return isMobile ? openMobile : open;
+  const { isMobile, open, openMobile, transientOpen } = useSidebar();
+  return isMobile ? openMobile : open || transientOpen;
 }
 
 function SidebarProvider({
@@ -106,6 +108,9 @@ function SidebarProvider({
 }) {
   const isMobile = useIsMobile();
   const [openMobile, setOpenMobile] = React.useState(false);
+  // Proximity hover opens the sidebar without persisting the cookie, so a
+  // transient reveal never sticks after a reload.
+  const [transientOpen, setTransientOpen] = React.useState(false);
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
@@ -114,6 +119,7 @@ function SidebarProvider({
   const setOpen = React.useCallback(
     async (value: boolean | ((value: boolean) => boolean)) => {
       const openState = typeof value === "function" ? value(open) : value;
+      setTransientOpen(false);
       if (setOpenProp) {
         setOpenProp(openState);
       } else {
@@ -138,7 +144,7 @@ function SidebarProvider({
 
   // We add a state so that we can do data-state="expanded" or "collapsed".
   // This makes it easier to style the sidebar with Tailwind classes.
-  const state = resolveSidebarState({ isMobile, open, openMobile });
+  const state = resolveSidebarState({ isMobile, open, openMobile, transientOpen });
 
   const contextValue = React.useMemo<SidebarContextProps>(
     () => ({
@@ -148,9 +154,11 @@ function SidebarProvider({
       setOpen,
       setOpenMobile,
       state,
+      transientOpen,
+      setTransientOpen,
       toggleSidebar,
     }),
-    [state, open, setOpen, isMobile, openMobile, toggleSidebar],
+    [state, open, setOpen, isMobile, openMobile, transientOpen, toggleSidebar],
   );
 
   return (
@@ -193,7 +201,8 @@ function Sidebar({
   collapsible?: "offcanvas" | "icon" | "none";
   resizable?: boolean | SidebarResizableOptions;
 }) {
-  const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
+  const { isMobile, state, openMobile, setOpenMobile, transientOpen, setTransientOpen } =
+    useSidebar();
   const resolvedResizable = React.useMemo<SidebarResolvedResizableOptions | null>(() => {
     if (isMobile || collapsible === "none" || !resizable) {
       return null;
@@ -303,6 +312,7 @@ function Sidebar({
             className,
           )}
           data-slot="sidebar-container"
+          onPointerLeave={transientOpen ? () => setTransientOpen(false) : undefined}
           {...props}
         >
           <div
@@ -313,6 +323,20 @@ function Sidebar({
             {children}
           </div>
         </div>
+        {/* Proximity hover zone: while an offcanvas sidebar is collapsed, a
+            thin strip at the screen edge reveals it without persisting the
+            cookie. The strip's 1px line keeps the hidden sidebar discoverable. */}
+        {state === "collapsed" && collapsible === "offcanvas" ? (
+          <div
+            aria-hidden="true"
+            className={cn(
+              "fixed inset-y-0 z-20 hidden w-2 cursor-e-resize after:absolute after:inset-y-0 after:w-px after:bg-sidebar-border/70 md:block",
+              side === "left" ? "left-0 after:left-0" : "right-0 after:right-0",
+            )}
+            data-slot="sidebar-hover-zone"
+            onPointerEnter={() => setTransientOpen(true)}
+          />
+        ) : null}
       </div>
     </SidebarInstanceContext>
   );
@@ -358,7 +382,8 @@ function SidebarRail({
   onPointerUp,
   ...props
 }: React.ComponentProps<"button">) {
-  const { open, toggleSidebar } = useSidebar();
+  const { toggleSidebar } = useSidebar();
+  const isOpen = useSidebarVisibility();
   const sidebarInstance = React.use(SidebarInstanceContext);
   const railRef = React.useRef<HTMLButtonElement | null>(null);
   const suppressClickRef = React.useRef(false);
@@ -377,7 +402,7 @@ function SidebarRail({
     wrapper: HTMLElement;
   } | null>(null);
   const resolvedResizable = sidebarInstance?.resizable ?? null;
-  const canResize = resolvedResizable !== null && open;
+  const canResize = resolvedResizable !== null && isOpen;
   const railLabel = canResize ? "Resize Sidebar" : "Toggle Sidebar";
   const railTitle = canResize ? "Drag to resize sidebar" : "Toggle Sidebar";
 
@@ -411,7 +436,7 @@ function SidebarRail({
     (event: React.PointerEvent<HTMLButtonElement>) => {
       onPointerDown?.(event);
       if (event.defaultPrevented) return;
-      if (!resolvedResizable || !open || event.button !== 0) return;
+      if (!resolvedResizable || !isOpen || event.button !== 0) return;
 
       const wrapper = event.currentTarget.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
       const sidebarRoot = event.currentTarget.closest<HTMLElement>("[data-slot='sidebar']");
@@ -457,7 +482,7 @@ function SidebarRail({
       document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
     },
-    [onPointerDown, open, resolvedResizable, sidebarInstance?.side],
+    [onPointerDown, isOpen, resolvedResizable, sidebarInstance?.side],
   );
 
   const handlePointerMove = React.useCallback(
@@ -548,13 +573,13 @@ function SidebarRail({
         event.preventDefault();
         return;
       }
-      if (resolvedResizable && open) {
+      if (resolvedResizable && isOpen) {
         event.preventDefault();
         return;
       }
       toggleSidebar();
     },
-    [onClick, open, resolvedResizable, toggleSidebar],
+    [onClick, isOpen, resolvedResizable, toggleSidebar],
   );
 
   React.useLayoutEffect(() => {

@@ -566,14 +566,14 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     background-color: var(--app-chrome-background);
   }
   /* Windows desktop (Mica): the DWM draws a translucent backdrop behind the
-     frameless window, so the root chrome stays translucent for the material
-     to tint through. !important wins over the boot-time and theme-sync inline
-     colors; the token itself is remixed translucent at the end of this file,
-     and the workspace surfaces pick up the material through their own remixes
-     there too. */
+     frameless window. The root chrome stays fully transparent; each surface
+     carries its own translucent tint (remixed at the end of this file) so the
+     material reads through a single layer — stacking tints here is what made
+     the window look solid. !important wins over the boot-time and theme-sync
+     inline colors. */
   html.electron-windows,
   html.electron-windows body {
-    background-color: var(--app-chrome-background) !important;
+    background-color: transparent !important;
   }
   body {
     @apply text-foreground relative;
@@ -2311,31 +2311,78 @@ code {
 }
 
 /* Windows desktop (Mica): the DWM draws a translucent backdrop behind the
-   frameless window. Remix the base surfaces translucent so the sidebar,
-   titlebar, and workspace panels all tint through to the material; overlays
-   (dialogs, popovers) keep their own --card/--popover paints. Unlayered so
-   these beat every palette block above; light-dark() follows the .dark class
-   for the built-in palettes. */
+   frameless window, and the root chrome is transparent (see the base layer),
+   so the material is only ever one translucent tint away. Remix the base
+   surfaces translucent so the sidebar, titlebar, and workspace panels all
+   tint through to the material; overlays (dialogs, popovers) keep their own
+   --card/--popover paints. Unlayered so these beat every palette block above;
+   light-dark() follows the .dark class for the built-in palettes. Tune the
+   tint with --mica-surface-opacity. */
 html.electron-windows {
+  --mica-surface-opacity: 75%;
   --background: color-mix(
     in srgb,
-    light-dark(var(--color-zinc-25), var(--color-neutral-950)) 88%,
+    light-dark(var(--color-zinc-25), var(--color-neutral-950)) var(--mica-surface-opacity),
     transparent
   );
   --app-chrome-background: color-mix(
     in srgb,
-    light-dark(var(--color-zinc-25), var(--color-neutral-950)) 88%,
+    light-dark(var(--color-zinc-25), var(--color-neutral-950)) var(--mica-surface-opacity),
     transparent
   );
   --sidebar: color-mix(
     in srgb,
-    light-dark(var(--color-zinc-50), var(--color-neutral-950)) 88%,
+    light-dark(var(--color-zinc-50), var(--color-neutral-950)) var(--mica-surface-opacity),
+    transparent
+  );
+  --toolbar-background: color-mix(
+    in srgb,
+    light-dark(var(--color-zinc-25), var(--color-neutral-950)) var(--mica-surface-opacity),
     transparent
   );
 }
 
+/* The sidebar owns a local palette that re-paints these roles solid on the
+   sidebar element itself; remix them there too so the sidebar tints through. */
+html.electron-windows [data-app-sidebar] {
+  --background: color-mix(
+    in srgb,
+    light-dark(var(--color-zinc-25), var(--color-neutral-950)) var(--mica-surface-opacity),
+    transparent
+  );
+  --sidebar: color-mix(
+    in srgb,
+    light-dark(var(--color-zinc-50), var(--color-neutral-950)) var(--mica-surface-opacity),
+    transparent
+  );
+  --sidebar-stage-fade: var(--sidebar);
+}
+
 html.electron-windows[data-theme-id]:not([data-theme-id=""]) {
-  --background: color-mix(in srgb, var(--app-theme-canvas) 88%, transparent);
-  --app-chrome-background: color-mix(in srgb, var(--app-theme-chrome) 88%, transparent);
-  --sidebar: color-mix(in srgb, var(--app-theme-sidebar) 88%, transparent);
+  --background: color-mix(
+    in srgb,
+    var(--app-theme-canvas) var(--mica-surface-opacity),
+    transparent
+  );
+  --app-chrome-background: color-mix(
+    in srgb,
+    var(--app-theme-chrome) var(--mica-surface-opacity),
+    transparent
+  );
+  --sidebar: color-mix(in srgb, var(--app-theme-sidebar) var(--mica-surface-opacity), transparent);
+  --toolbar-background: color-mix(
+    in srgb,
+    var(--app-theme-toolbar) var(--mica-surface-opacity),
+    transparent
+  );
+}
+
+html.electron-windows[data-theme-id]:not([data-theme-id=""]) [data-app-sidebar] {
+  --background: color-mix(
+    in srgb,
+    var(--app-theme-canvas) var(--mica-surface-opacity),
+    transparent
+  );
+  --sidebar: color-mix(in srgb, var(--app-theme-sidebar) var(--mica-surface-opacity), transparent);
+  --sidebar-stage-fade: var(--sidebar);
 }

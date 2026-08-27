@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  Sidebar,
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuSubButton,
@@ -37,6 +38,37 @@ describe("sidebar interactive cursors", () => {
     );
 
     expect(html).toContain('data-sidebar-state="collapsed"');
+  });
+
+  it("treats a transient hover reveal as expanded on desktop only", () => {
+    expect(
+      resolveSidebarState({ isMobile: false, open: false, openMobile: false, transientOpen: true }),
+    ).toBe("expanded");
+    expect(
+      resolveSidebarState({ isMobile: true, open: false, openMobile: false, transientOpen: true }),
+    ).toBe("collapsed");
+  });
+
+  it("renders the proximity hover zone for a collapsed sidebar", () => {
+    const html = renderToStaticMarkup(
+      <SidebarProvider defaultOpen={false}>
+        <Sidebar collapsible="offcanvas" />
+      </SidebarProvider>,
+    );
+
+    expect(html).toContain('data-slot="sidebar-hover-zone"');
+    expect(html).toContain('data-slot="sidebar-gap"');
+  });
+
+  it("drops the hover zone once the sidebar is expanded", () => {
+    const html = renderToStaticMarkup(
+      <SidebarProvider defaultOpen>
+        <Sidebar collapsible="offcanvas" />
+      </SidebarProvider>,
+    );
+
+    expect(html).not.toContain('data-slot="sidebar-hover-zone"');
+    expect(html).toContain('data-slot="sidebar-gap"');
   });
 
   it("keeps the sidebar trigger interactive inside Electron drag regions", () => {

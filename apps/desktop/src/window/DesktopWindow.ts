@@ -130,8 +130,11 @@ function getInitialWindowBackgroundColor(shouldUseDarkColors: boolean): string {
 }
 
 // Windows 11 22H2 (build 22621) and later can draw DWM system backdrops
-// (Mica) behind frameless windows. Older Windows and other platforms keep the
-// solid fallback background color so the window never renders transparent.
+// (Mica) behind frameless windows. Mica needs an opaque window: DWM draws no
+// backdrop into layered/transparent windows, so the renderer's own
+// translucent surfaces are what let the material show through. Older Windows
+// and other platforms keep the solid fallback background color so the window
+// never renders transparent.
 const MICA_MIN_WINDOWS_BUILD = 22621;
 
 export function resolveWindowBackgroundMaterial(

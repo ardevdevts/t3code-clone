@@ -4,6 +4,9 @@ export function resolveSidebarState(input: {
   isMobile: boolean;
   open: boolean;
   openMobile: boolean;
+  transientOpen?: boolean;
 }): ResponsiveSidebarState {
-  return (input.isMobile ? input.openMobile : input.open) ? "expanded" : "collapsed";
+  return (input.isMobile ? input.openMobile : input.open || input.transientOpen === true)
+    ? "expanded"
+    : "collapsed";
 }
