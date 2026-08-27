@@ -22,6 +22,7 @@ export type ThreadActionMenuId =
   | "copy-path"
   | "copy-branch"
   | "copy-thread-id"
+  | "copy-markdown"
   | "archive"
   | "delete";
 
@@ -118,6 +119,11 @@ export function buildThreadActionMenuItems(
           : []),
         { id: "copy-thread-id", label: "Thread ID", icon: "hash" },
       ],
+    },
+    {
+      id: "copy-markdown",
+      label: "Copy as markdown",
+      icon: "file-text",
     },
     // Archive removes the thread from the sidebar while keeping its
     // conversation under Settings > Archived threads — distinct from Settle

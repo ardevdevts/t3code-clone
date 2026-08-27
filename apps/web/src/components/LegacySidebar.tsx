@@ -195,6 +195,7 @@ import { useIsMobile } from "~/hooks/useMediaQuery";
 import { CommandDialogTrigger } from "./ui/command";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 import { primaryServerKeybindingsAtom } from "../state/server";
+import { copyThreadAsMarkdownToClipboard } from "../threadMarkdown";
 import {
   derivePhysicalProjectKey,
   deriveProjectGroupingOverrideKey,
@@ -2157,6 +2158,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
+          { id: "copy-markdown", label: "Copy as markdown", icon: "file-text" },
           { id: "delete", label: "Delete", destructive: true, icon: "trash" },
         ],
         position,
@@ -2211,6 +2213,19 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       }
       if (clicked === "copy-thread-id") {
         copyThreadIdToClipboard(thread.id, { threadId: thread.id });
+        return;
+      }
+      if (clicked === "copy-markdown") {
+        const copied = await copyThreadAsMarkdownToClipboard(threadRef);
+        toastManager.add(
+          copied
+            ? { type: "success", title: "Thread copied as markdown" }
+            : stackedThreadToast({
+                type: "error",
+                title: "Failed to copy thread as markdown",
+                description: "Could not load the thread content.",
+              }),
+        );
         return;
       }
       if (clicked !== "delete") return;
