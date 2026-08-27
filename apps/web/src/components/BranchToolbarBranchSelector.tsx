@@ -759,7 +759,7 @@ export function BranchToolbarBranchSelector({
         >
           <ComboboxTrigger
             render={<Button variant="ghost" size="xs" />}
-            className="min-w-0 max-w-full text-muted-foreground/70 hover:text-foreground/80"
+            className="min-w-0 max-w-full text-[14px] font-medium text-muted-foreground/70 hover:text-foreground/80 sm:text-[13px]"
             disabled={isInitialBranchesLoadPending || isBranchActionPending}
           >
             <GitBranchIcon className="size-3 shrink-0 opacity-70" />
