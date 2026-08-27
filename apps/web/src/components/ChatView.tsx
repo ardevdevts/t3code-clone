@@ -172,7 +172,6 @@ import {
   foldSubagentActivities,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
-import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
@@ -291,7 +290,6 @@ import { WorkspacePageHeader } from "./WorkspacePageHeader";
 import {
   resolveEffectiveEnvMode,
   resolveLocalCheckoutBranchMismatch,
-  shouldShowComposerContextStrip,
   shouldShowEnvironmentIndicator,
 } from "./BranchToolbar.logic";
 import {
@@ -319,8 +317,6 @@ import {
 } from "./chat/ContextWindowMeter.logic";
 import { deriveLatestContextWindowSnapshot, formatContextWindowTokens } from "../lib/contextWindow";
 import { ThreadSyncStatusPill } from "./chat/ThreadSyncStatusPill";
-import { useDelayedReveal } from "../hooks/useDelayedReveal";
-import { THREAD_SYNC_REVEAL_DELAY_MS } from "../threadSync";
 import {
   DRAFT_HERO_TRANSITION_ANIMATION_ID,
   DRAFT_HERO_TRANSITION_DURATION_MS,
@@ -1273,11 +1269,6 @@ function ChatViewContent(props: ChatViewProps) {
   const draftId = routeKind === "draft" ? props.draftId : null;
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
-  // The pill only appears once a sync has outlasted the reveal window, so a
-  // brief re-sync on refocus does not flash it. The empty-placeholder loading
-  // state stays driven by the raw phase; only the pill and its drawer attach
-  // follow the delayed value.
-  const revealedThreadSyncPhase = useDelayedReveal(threadSyncPhase, THREAD_SYNC_REVEAL_DELAY_MS);
   const handleNewThread = useNewThreadHandler();
   const { settleThread } = useThreadActions();
   const routeThreadRef = useMemo(
@@ -2863,11 +2854,6 @@ function ChatViewContent(props: ChatViewProps) {
     terminalUiLaunchContext?.threadId === activeThreadId ? terminalUiLaunchContext : null;
   // Default true while loading to avoid toolbar flicker.
   const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
-  const showComposerContextStrip = shouldShowComposerContextStrip({
-    hasActiveProject: activeProject !== null,
-    isGitRepo,
-    showEnvironmentIndicator: showComposerEnvironmentIndicator,
-  });
   const initialDiffPanelGitScope =
     gitStatusQuery.data?.hasWorkingTreeChanges === true ? "unstaged" : "branch";
   const diffPanelGitStatusResolutionKey = gitStatusQuery.data ? "resolved" : "pending";
@@ -6824,8 +6810,7 @@ function ChatViewContent(props: ChatViewProps) {
     addFiles: (files) => composerRef.current?.addDroppedFiles(files),
   });
   const externalComposerDrawerAttached =
-    composerBannerItems.length > 0 ||
-    Boolean(revealedThreadSyncPhase && !activeEnvironmentUnavailable);
+    composerBannerItems.length > 0 || Boolean(threadSyncPhase && !activeEnvironmentUnavailable);
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
@@ -7010,8 +6995,8 @@ function ChatViewContent(props: ChatViewProps) {
                   ) : (
                     <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
                   )}
-                  {revealedThreadSyncPhase && !activeEnvironmentUnavailable ? (
-                    <ThreadSyncStatusPill phase={revealedThreadSyncPhase} />
+                  {threadSyncPhase && !activeEnvironmentUnavailable ? (
+                    <ThreadSyncStatusPill phase={threadSyncPhase} />
                   ) : null}
                   <div
                     className="relative"
@@ -7022,40 +7007,8 @@ function ChatViewContent(props: ChatViewProps) {
                     }
                   >
                     <div
-                      className={cn(
-                        "chat-composer-glass-shell relative mx-auto w-full max-w-3xl",
-                        externalComposerDrawerAttached && "chat-composer-glass-shell-attached",
-                      )}
+                        className="chat-composer-glass-shell relative z-10 w-full rounded-[22px]"
                     >
-                      {showComposerContextStrip && (
-                        <div className="pointer-events-auto">
-                          <BranchToolbar
-                            environmentId={activeThread.environmentId}
-                            threadId={activeThread.id}
-                            showGitControls={isGitRepo}
-                            {...(routeKind === "draft" && draftId ? { draftId } : {})}
-                            onEnvModeChange={onEnvModeChange}
-                            startFromOrigin={startFromOrigin}
-                            onStartFromOriginChange={onStartFromOriginChange}
-                            {...(canOverrideServerThreadEnvMode
-                              ? { effectiveEnvModeOverride: envMode }
-                              : {})}
-                            {...(canOverrideServerThreadEnvMode
-                              ? {
-                                  activeThreadBranchOverride: activeThreadBranch,
-                                  onActiveThreadBranchOverrideChange: setPendingServerThreadBranch,
-                                }
-                              : {})}
-                            envLocked={envLocked}
-                            onComposerFocusRequest={scheduleComposerFocus}
-                            {...(canCheckoutPullRequestIntoThread
-                              ? { onCheckoutPullRequestRequest: openPullRequestDialog }
-                              : {})}
-                            {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
-                            availableEnvironments={logicalProjectEnvironments}
-                          />
-                        </div>
-                      )}
                       <div className="chat-composer-glass-host relative z-10 w-full rounded-[22px]">
                         <div ref={attachDraftHeroComposerAnchorRef} className="relative z-10">
                           <ChatComposer
@@ -7144,7 +7097,6 @@ function ChatViewContent(props: ChatViewProps) {
                             setThreadError={setThreadError}
                             onExpandImage={onExpandTimelineImage}
                           />
-                        </div>
                       </div>
                     </div>
                     <div

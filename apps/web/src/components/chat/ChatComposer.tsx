@@ -53,6 +53,7 @@ import {
 import {
   type ComposerImageAttachment,
   type DraftId,
+  type DraftThreadEnvMode,
   type PersistedComposerImageAttachment,
   hydrateImagesFromPersisted,
   useComposerDraftStore,
@@ -109,6 +110,8 @@ import {
 } from "../composerFooterLayout";
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
 import { ProviderModelPicker } from "./ProviderModelPicker";
+import { BranchToolbar } from "../BranchToolbar";
+import { type EnvMode, type EnvironmentOption } from "../BranchToolbar.logic";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
@@ -663,6 +666,22 @@ export interface ChatComposerProps {
   scheduleComposerFocus: () => void;
   setThreadError: (threadId: ThreadId | null, error: string | null) => void;
   onExpandImage: (preview: ExpandedImagePreview) => void;
+
+  // Branch toolbar (moved into footer)
+  showGitControls: boolean;
+  onEnvModeChange: (mode: EnvMode) => void;
+  startFromOrigin: boolean;
+  onStartFromOriginChange: (startFromOrigin: boolean) => void;
+  canOverrideServerThreadEnvMode: boolean;
+  envModeOverride: DraftThreadEnvMode;
+  activeThreadBranch: string | null;
+  onActiveThreadBranchOverrideChange: (branch: string | null) => void;
+  envLocked: boolean;
+  canCheckoutPullRequestIntoThread: boolean;
+  openPullRequestDialog: (reference: string) => void;
+  hasMultipleEnvironments: boolean;
+  onEnvironmentChange: (environmentId: EnvironmentId) => void;
+  logicalProjectEnvironments: readonly EnvironmentOption[];
 }
 
 // --------------------------------------------------------------------------
@@ -740,6 +759,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     scheduleComposerFocus,
     setThreadError,
     onExpandImage,
+    showGitControls,
+    onEnvModeChange,
+    startFromOrigin,
+    onStartFromOriginChange,
+    canOverrideServerThreadEnvMode,
+    envModeOverride,
+    activeThreadBranch,
+    onActiveThreadBranchOverrideChange,
+    envLocked,
+    canCheckoutPullRequestIntoThread,
+    openPullRequestDialog,
+    hasMultipleEnvironments,
+    onEnvironmentChange,
+    logicalProjectEnvironments,
   } = props;
   // ------------------------------------------------------------------
   // Store subscriptions (prompt / images / terminal contexts)
@@ -3183,7 +3216,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             <div
               ref={setComposerMenuAnchor}
               className={cn(
-                "relative px-3 pb-3.5 sm:px-4",
+                "relative px-3 pb-2 sm:px-4",
                 "pt-3.5 sm:pt-4",
                 isComposerApprovalState && "pb-3 sm:pb-4",
                 isComposerCollapsedMobile && "hidden",
@@ -3459,129 +3492,173 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             <ComposerPromptLengthValidation
               message={providerInputSubmissionError ?? composerSubmissionError}
             />
+
+            {/* Bottom toolbar */}
+            {isComposerCollapsedMobile || isComposerApprovalState ? null : (
+              <div
+                data-chat-composer-footer="true"
+                data-chat-composer-footer-compact={isComposerFooterCompact ? "true" : "false"}
+                className={cn(
+                  "flex min-w-0 flex-nowrap items-center justify-between gap-2 overflow-visible px-3 pb-3 sm:px-4 sm:pb-4",
+                  pendingUserInputs.length > 0 && "pt-2",
+                  isComposerFooterCompact ? "gap-1.5" : "gap-2 sm:gap-0",
+                  showMobilePendingAnswerActions && "hidden sm:flex",
+                )}
+              >
+                <div className="-m-1 -ms-3.5 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto p-1 ps-3.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  {noProviderAvailable ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      disabled
+                      data-chat-provider-unavailable="true"
+                      className="shrink-0 gap-2 px-2 text-secondary-label sm:px-3"
+                    >
+                      <CircleAlertIcon className="size-4" />
+                      No provider available
+                    </Button>
+                  ) : (
+                    <ProviderModelPicker
+                      compact={isComposerFooterCompact}
+                      activeInstanceId={selectedInstanceId}
+                      model={selectedModelForPickerWithCustomFallback}
+                      lockedProvider={lockedProvider}
+                      lockedContinuationGroupKey={lockedContinuationGroupKey}
+                      instanceEntries={providerInstanceEntries}
+                      keybindings={keybindings}
+                      modelOptionsByInstance={modelOptionsByInstance}
+                      triggerClassName="-ms-2.5"
+                      terminalOpen={terminalOpen}
+                      open={isComposerModelPickerOpen}
+                      {...(composerProviderState.modelPickerIconClassName
+                        ? {
+                            activeProviderIconClassName:
+                              composerProviderState.modelPickerIconClassName,
+                          }
+                        : {})}
+                      onOpenChange={(open) => {
+                        setIsComposerModelPickerOpen(open);
+                      }}
+                      getModelDisabledReason={getModelDisabledReason}
+                      onInstanceModelChange={onProviderModelSelect}
+                    />
+                  )}
+
+                  {isComposerFooterCompact ? (
+                    <CompactComposerControlsMenu
+                      interactionMode={interactionMode}
+                      runtimeMode={runtimeMode}
+                      showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
+                      traitsMenuContent={providerTraitsMenuContent}
+                      onToggleInteractionMode={toggleInteractionMode}
+                      onRuntimeModeChange={handleRuntimeModeChange}
+                    />
+                  ) : (
+                    <>
+                      {providerTraitsPicker ? (
+                        <>
+                          <Separator
+                            orientation="vertical"
+                            className="mx-0.5 hidden h-4 sm:block"
+                          />
+                          {providerTraitsPicker}
+                        </>
+                      ) : null}
+                      <ComposerFooterModeControls
+                        showInteractionModeToggle={
+                          composerProviderControls.showInteractionModeToggle
+                        }
+                        interactionMode={interactionMode}
+                        runtimeMode={runtimeMode}
+                        onToggleInteractionMode={toggleInteractionMode}
+                        onRuntimeModeChange={handleRuntimeModeChange}
+                      />
+                    </>
+                  )}
+                </div>
+
+                {/* Branch context strip */}
+                {activeThreadId && (
+                  <div className="flex shrink-0 items-center">
+                    <BranchToolbar
+                      environmentId={environmentId}
+                      threadId={activeThreadId}
+                      showGitControls={showGitControls}
+                      {...(routeKind === "draft" && draftId ? { draftId } : {})}
+                      onEnvModeChange={onEnvModeChange}
+                      startFromOrigin={startFromOrigin}
+                      onStartFromOriginChange={onStartFromOriginChange}
+                      {...(canOverrideServerThreadEnvMode
+                        ? { effectiveEnvModeOverride: envModeOverride }
+                        : {})}
+                      {...(canOverrideServerThreadEnvMode
+                        ? {
+                            activeThreadBranchOverride: activeThreadBranch,
+                            onActiveThreadBranchOverrideChange:
+                              onActiveThreadBranchOverrideChange,
+                          }
+                        : {})}
+                      envLocked={envLocked}
+                      onComposerFocusRequest={scheduleComposerFocus}
+                      {...(canCheckoutPullRequestIntoThread
+                        ? { onCheckoutPullRequestRequest: openPullRequestDialog }
+                        : {})}
+                      {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
+                      availableEnvironments={logicalProjectEnvironments}
+                      compact
+                    />
+                  </div>
+                )}
+
+                {/* Right side: send / stop button */}
+                <div
+                  data-chat-composer-actions="right"
+                  data-chat-composer-primary-actions-compact={
+                    isComposerPrimaryActionsCompact ? "true" : "false"
+                  }
+                  className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
+                >
+                  {showMobilePendingAnswerActions ? null : inlineTasksBadge}
+                  {showMobilePendingAnswerActions ? null : inlineStashBadge}
+                  <ComposerFooterPrimaryActions
+                    compact={isComposerPrimaryActionsCompact}
+                    activeContextWindow={activeContextWindow}
+                    activeThreadModelDisplayName={activeThreadModelDisplayName}
+                    pendingAction={pendingPrimaryAction}
+                    isRunning={phase === "running"}
+                    showPlanFollowUpPrompt={
+                      pendingUserInputs.length === 0 && showPlanFollowUpPrompt
+                    }
+                    promptHasText={prompt.trim().length > 0}
+                    isSendBusy={isSendBusy}
+                    sendDisabledReason={sendDisabledReason}
+                    isConnecting={isConnecting}
+                    isEnvironmentUnavailable={
+                      environmentUnavailable !== null ||
+                      noProviderAvailable ||
+                      projectSelectionRequired
+                    }
+                    isPreparingWorktree={isPreparingWorktree}
+                    hasSendableContent={composerSendState.hasSendableContent}
+                    preserveComposerFocusOnPointerDown={isMobileViewport}
+                    showSendWhileRunning={isMobileViewport}
+                    onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
+                    onInterrupt={handleInterruptPrimaryAction}
+                    onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
+                    compactDisabled={
+                      compactDisabled || noProviderAvailable || isSendBusy || isConnecting
+                    }
+                    compactDisabledReason={resolvedCompactDisabledReason}
+                    {...(selectedProvider === "claudeAgent"
+                      ? { onCompactContext: compactThreadContext }
+                      : {})}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         </div>
-
-        {/* Bottom toolbar — renders below the glass surface, on the page background */}
-        {isComposerCollapsedMobile || isComposerApprovalState ? null : (
-          <div
-            data-chat-composer-footer="true"
-            data-chat-composer-footer-compact={isComposerFooterCompact ? "true" : "false"}
-            className={cn(
-              "flex min-w-0 flex-nowrap items-center justify-between gap-2 overflow-visible px-3 pt-2 pb-3 sm:px-4 sm:pb-4",
-              isComposerFooterCompact ? "gap-1.5" : "gap-2 sm:gap-0",
-              showMobilePendingAnswerActions && "hidden sm:flex",
-            )}
-          >
-            <div className="-m-1 -ms-3.5 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto p-1 ps-3.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {noProviderAvailable ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  disabled
-                  data-chat-provider-unavailable="true"
-                  className="shrink-0 gap-2 px-2 text-secondary-label sm:px-3"
-                >
-                  <CircleAlertIcon className="size-4" />
-                  No provider available
-                </Button>
-              ) : (
-                <ProviderModelPicker
-                  compact={isComposerFooterCompact}
-                  activeInstanceId={selectedInstanceId}
-                  model={selectedModelForPickerWithCustomFallback}
-                  lockedProvider={lockedProvider}
-                  lockedContinuationGroupKey={lockedContinuationGroupKey}
-                  instanceEntries={providerInstanceEntries}
-                  keybindings={keybindings}
-                  modelOptionsByInstance={modelOptionsByInstance}
-                  triggerClassName="-ms-2.5"
-                  terminalOpen={terminalOpen}
-                  open={isComposerModelPickerOpen}
-                  {...(composerProviderState.modelPickerIconClassName
-                    ? {
-                        activeProviderIconClassName: composerProviderState.modelPickerIconClassName,
-                      }
-                    : {})}
-                  onOpenChange={(open) => {
-                    setIsComposerModelPickerOpen(open);
-                  }}
-                  getModelDisabledReason={getModelDisabledReason}
-                  onInstanceModelChange={onProviderModelSelect}
-                />
-              )}
-
-              {isComposerFooterCompact ? (
-                <CompactComposerControlsMenu
-                  interactionMode={interactionMode}
-                  runtimeMode={runtimeMode}
-                  showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
-                  traitsMenuContent={providerTraitsMenuContent}
-                  onToggleInteractionMode={toggleInteractionMode}
-                  onRuntimeModeChange={handleRuntimeModeChange}
-                />
-              ) : (
-                <>
-                  {providerTraitsPicker ? (
-                    <>
-                      <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
-                      {providerTraitsPicker}
-                    </>
-                  ) : null}
-                  <ComposerFooterModeControls
-                    showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
-                    interactionMode={interactionMode}
-                    runtimeMode={runtimeMode}
-                    onToggleInteractionMode={toggleInteractionMode}
-                    onRuntimeModeChange={handleRuntimeModeChange}
-                  />
-                </>
-              )}
-            </div>
-
-            {/* Right side: send / stop button */}
-            <div
-              data-chat-composer-actions="right"
-              data-chat-composer-primary-actions-compact={
-                isComposerPrimaryActionsCompact ? "true" : "false"
-              }
-              className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
-            >
-              {showMobilePendingAnswerActions ? null : inlineTasksBadge}
-              {showMobilePendingAnswerActions ? null : inlineStashBadge}
-              <ComposerFooterPrimaryActions
-                compact={isComposerPrimaryActionsCompact}
-                activeContextWindow={activeContextWindow}
-                activeThreadModelDisplayName={activeThreadModelDisplayName}
-                pendingAction={pendingPrimaryAction}
-                isRunning={phase === "running"}
-                showPlanFollowUpPrompt={pendingUserInputs.length === 0 && showPlanFollowUpPrompt}
-                promptHasText={prompt.trim().length > 0}
-                isSendBusy={isSendBusy}
-                sendDisabledReason={sendDisabledReason}
-                isConnecting={isConnecting}
-                isEnvironmentUnavailable={
-                  environmentUnavailable !== null || noProviderAvailable || projectSelectionRequired
-                }
-                isPreparingWorktree={isPreparingWorktree}
-                hasSendableContent={composerSendState.hasSendableContent}
-                preserveComposerFocusOnPointerDown={isMobileViewport}
-                showSendWhileRunning={isMobileViewport}
-                onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
-                onInterrupt={handleInterruptPrimaryAction}
-                onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
-                compactDisabled={
-                  compactDisabled || noProviderAvailable || isSendBusy || isConnecting
-                }
-                compactDisabledReason={resolvedCompactDisabledReason}
-                {...(selectedProvider === "claudeAgent"
-                  ? { onCompactContext: compactThreadContext }
-                  : {})}
-              />
-            </div>
-          </div>
-        )}
       </div>
     </form>
   );
