@@ -30,6 +30,7 @@ import {
   readThreadShell,
 } from "../state/entities";
 import { readLocalApi } from "../localApi";
+import { copyThreadAsMarkdownToClipboard } from "../threadMarkdown";
 import { useUiStateStore } from "../uiStateStore";
 import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
@@ -233,6 +234,19 @@ export function useThreadActionMenu(input: {
           case "mark-unread":
             markThreadUnread(scopedThreadKey(threadRef), thread.latestTurn?.completedAt);
             return;
+          case "copy-markdown": {
+            const copied = await copyThreadAsMarkdownToClipboard(threadRef);
+            toastManager.add(
+              copied
+                ? { type: "success", title: "Thread copied as markdown" }
+                : stackedThreadToast({
+                    type: "error",
+                    title: "Failed to copy thread as markdown",
+                    description: "Could not load the thread content.",
+                  }),
+            );
+            return;
+          }
           case "copy-path": {
             const workspacePath = thread.worktreePath ?? projectCwd;
             if (!workspacePath) {

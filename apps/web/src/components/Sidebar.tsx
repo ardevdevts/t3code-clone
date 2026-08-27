@@ -113,6 +113,7 @@ import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
+import { copyThreadAsMarkdownToClipboard } from "../threadMarkdown";
 import {
   buildThreadRouteParams,
   resolveActiveThreadRouteRef,
@@ -3167,6 +3168,19 @@ export default function Sidebar() {
           case "mark-unread":
             markThreadUnread(threadKey, thread.latestTurn?.completedAt);
             return;
+          case "copy-markdown": {
+            const copied = await copyThreadAsMarkdownToClipboard(threadRef);
+            toastManager.add(
+              copied
+                ? { type: "success", title: "Thread copied as markdown" }
+                : stackedThreadToast({
+                    type: "error",
+                    title: "Failed to copy thread as markdown",
+                    description: "Could not load the thread content.",
+                  }),
+            );
+            return;
+          }
           case "copy-path":
             if (!threadWorkspacePath) {
               toastManager.add(
