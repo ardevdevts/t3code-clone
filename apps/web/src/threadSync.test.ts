@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveThreadSyncPhase, threadSyncLabel } from "./threadSync";
+import { resolveThreadSyncPhase, THREAD_SYNC_REVEAL_DELAY_MS, threadSyncLabel } from "./threadSync";
+
+describe("thread sync reveal delay", () => {
+  it("waits half a second before revealing the status pill", () => {
+    expect(THREAD_SYNC_REVEAL_DELAY_MS).toBe(500);
+  });
+});
 
 describe("resolveThreadSyncPhase", () => {
   it("loads when only shell data is available", () => {

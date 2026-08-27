@@ -165,7 +165,7 @@ function SidebarProvider({
     <SidebarContext value={contextValue}>
       <div
         className={cn(
-          "group/sidebar-wrapper flex min-h-svh w-full has-data-[variant=inset]:bg-sidebar",
+          "group/sidebar-wrapper flex min-h-svh w-screen h-dvh! min-h-0! has-data-[variant=inset]:bg-sidebar",
           className,
         )}
         data-sidebar-state={state}
@@ -316,7 +316,7 @@ function Sidebar({
           {...props}
         >
           <div
-            className="flex h-full w-full flex-col bg-sidebar surface-grain group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm/5"
+            className="flex h-full w-full flex-col bg-sidebar/60 surface-grain group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm/5"
             data-sidebar="sidebar"
             data-slot="sidebar-inner"
           >
@@ -330,7 +330,7 @@ function Sidebar({
           <div
             aria-hidden="true"
             className={cn(
-              "fixed inset-y-0 z-20 hidden w-2 cursor-e-resize after:absolute after:inset-y-0 after:w-px after:bg-sidebar-border/70 md:block",
+              "fixed inset-y-0 z-20 hidden w-6 cursor-e-resize after:absolute after:inset-y-0 after:left-px after:w-px after:bg-sidebar-border/70 md:block",
               side === "left" ? "left-0 after:left-0" : "right-0 after:right-0",
             )}
             data-slot="sidebar-hover-zone"

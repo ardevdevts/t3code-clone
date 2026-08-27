@@ -34,6 +34,7 @@ import Animated, {
   LinearTransition,
 } from "react-native-reanimated";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { useDelayedReveal } from "../../lib/useDelayedReveal";
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -88,6 +89,14 @@ export const COMPOSER_COLLAPSED_CHROME = 60;
  * Used by the parent to compute the larger feed bottom inset when the composer is focused.
  */
 export const COMPOSER_EXPANDED_CHROME = 156;
+
+/**
+ * How long a message sync must persist before the status pill is shown. Brief
+ * re-syncs on refocus resolve in a few hundred milliseconds; showing the pill
+ * for those reads as a flicker, so it only appears for syncs that outlast
+ * this window.
+ */
+export const THREAD_SYNC_REVEAL_DELAY_MS = 500;
 
 export interface ThreadComposerProps {
   readonly draftMessage: string;
@@ -336,11 +345,17 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     props.connectionState !== "connected" || props.queueCount > 0 ? "Queue" : "Send";
   const currentModelSelection = props.selectedThread.modelSelection;
   const currentRuntimeMode = props.selectedThread.runtimeMode;
+  // The status pill only appears once a sync has outlasted the reveal window,
+  // so a brief re-sync on refocus does not flash it.
+  const revealedThreadSyncPhase = useDelayedReveal(
+    props.threadSyncPhase ?? null,
+    THREAD_SYNC_REVEAL_DELAY_MS,
+  );
   const connectionStatus = composerConnectionStatus({
     connectionError: props.connectionError,
     connectionState: props.connectionState,
     environmentLabel: props.environmentLabel,
-    threadSyncPhase: props.threadSyncPhase,
+    threadSyncPhase: revealedThreadSyncPhase,
   });
   const toolbarSurface = String(useThemeColor("--color-card"));
   const backdropSurface = String(useThemeColor("--color-screen"));

@@ -2386,3 +2386,13 @@ html.electron-windows[data-theme-id]:not([data-theme-id=""]) [data-app-sidebar] 
   --sidebar: color-mix(in srgb, var(--app-theme-sidebar) var(--mica-surface-opacity), transparent);
   --sidebar-stage-fade: var(--sidebar);
 }
+
+/* Pages paint their own full-bleed --background inside the inset (chat,
+   settings, usage), and the chat header paints its own strip on top of that.
+   Keeping those parent layers would stack a second tint on the material and
+   read as opaque; drop them so every column shows the backdrop through its
+   single surface layer. */
+html.electron-windows [data-slot="sidebar-inset"],
+html.electron-windows [data-chat-header] {
+  background-color: transparent;
+}

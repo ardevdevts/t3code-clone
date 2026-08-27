@@ -319,6 +319,8 @@ import {
 } from "./chat/ContextWindowMeter.logic";
 import { deriveLatestContextWindowSnapshot, formatContextWindowTokens } from "../lib/contextWindow";
 import { ThreadSyncStatusPill } from "./chat/ThreadSyncStatusPill";
+import { useDelayedReveal } from "../hooks/useDelayedReveal";
+import { THREAD_SYNC_REVEAL_DELAY_MS } from "../threadSync";
 import {
   DRAFT_HERO_TRANSITION_ANIMATION_ID,
   DRAFT_HERO_TRANSITION_DURATION_MS,
@@ -1271,6 +1273,11 @@ function ChatViewContent(props: ChatViewProps) {
   const draftId = routeKind === "draft" ? props.draftId : null;
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
+  // The pill only appears once a sync has outlasted the reveal window, so a
+  // brief re-sync on refocus does not flash it. The empty-placeholder loading
+  // state stays driven by the raw phase; only the pill and its drawer attach
+  // follow the delayed value.
+  const revealedThreadSyncPhase = useDelayedReveal(threadSyncPhase, THREAD_SYNC_REVEAL_DELAY_MS);
   const handleNewThread = useNewThreadHandler();
   const { settleThread } = useThreadActions();
   const routeThreadRef = useMemo(
@@ -6817,10 +6824,11 @@ function ChatViewContent(props: ChatViewProps) {
     addFiles: (files) => composerRef.current?.addDroppedFiles(files),
   });
   const externalComposerDrawerAttached =
-    composerBannerItems.length > 0 || Boolean(threadSyncPhase && !activeEnvironmentUnavailable);
+    composerBannerItems.length > 0 ||
+    Boolean(revealedThreadSyncPhase && !activeEnvironmentUnavailable);
 
   return (
-    <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
+    <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background/60">
       {rightPanelOpen && !shouldUseRightPanelSheet ? panelLayoutControls : null}
       <div
         className={cn(
@@ -7002,8 +7010,8 @@ function ChatViewContent(props: ChatViewProps) {
                   ) : (
                     <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
                   )}
-                  {threadSyncPhase && !activeEnvironmentUnavailable ? (
-                    <ThreadSyncStatusPill phase={threadSyncPhase} />
+                  {revealedThreadSyncPhase && !activeEnvironmentUnavailable ? (
+                    <ThreadSyncStatusPill phase={revealedThreadSyncPhase} />
                   ) : null}
                   <div
                     className="relative"
