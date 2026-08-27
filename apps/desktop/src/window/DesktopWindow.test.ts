@@ -104,6 +104,7 @@ function makeFakeBrowserWindow() {
     }),
     restore: vi.fn(),
     setBackgroundColor: vi.fn(),
+    setBackgroundMaterial: vi.fn(),
     setAutoHideCursor: vi.fn(),
     setTitle: vi.fn(),
     setTitleBarOverlay: vi.fn(),
@@ -127,6 +128,8 @@ function makeFakeBrowserWindow() {
     setZoomLevel: webContents.setZoomLevel,
     setBackgroundThrottling: webContents.setBackgroundThrottling,
     setAutoHideCursor: window.setAutoHideCursor,
+    setBackgroundColor: window.setBackgroundColor,
+    setBackgroundMaterial: window.setBackgroundMaterial,
     webContentsListeners,
     windowListeners,
   };
@@ -197,6 +200,7 @@ function makeTestLayer(input: {
   readonly createCount: Ref.Ref<number>;
   readonly mainWindow: Ref.Ref<Option.Option<Electron.BrowserWindow>>;
   readonly createdWindowOptions?: Electron.BrowserWindowConstructorOptions[];
+  readonly environment?: DesktopEnvironment.MakeDesktopEnvironmentInput;
   readonly desktopSettings?: DesktopAppSettings.DesktopSettings;
   readonly mainWindowBoundsUpdates?: DesktopAppSettings.DesktopWindowBounds[];
   readonly mainWindowMaximizedUpdates?: boolean[];
@@ -259,11 +263,23 @@ function makeTestLayer(input: {
     syncAllAppearance: (sync) => sync(input.window),
   } satisfies ElectronWindow.ElectronWindow["Service"]);
 
+  const environmentLayer = DesktopEnvironment.layer(input.environment ?? environmentInput).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        DesktopConfig.layerTest({
+          T3CODE_PORT: "3773",
+          VITE_DEV_SERVER_URL: "http://127.0.0.1:5733",
+        }),
+      ),
+    ),
+  );
+
   return DesktopWindow.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         desktopAssetsLayer,
-        desktopEnvironmentLayer,
+        environmentLayer,
         desktopAppSettingsLayer,
         desktopClientSettingsLayer,
         desktopServerExposureLayer,
@@ -337,6 +353,7 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
                 frame: null,
                 transparent: null,
                 backgroundColor: null,
+                backgroundMaterial: null,
                 webPreferences: {
                   preload: null,
                   partition: null,
@@ -1233,6 +1250,90 @@ describe("DesktopWindow", () => {
         assert.equal(yield* Ref.get(scenario.createCalls), 3);
         assert.deepEqual(main.send.mock.calls, [[MENU_ACTION_CHANNEL, "open-settings"]]);
       }).pipe(Effect.provide(scenario.layer));
+    }),
+  );
+
+  describe("resolveWindowBackgroundMaterial", () => {
+    it("enables Mica on Windows 11 22H2+ builds", () => {
+      assert.equal(DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.22621"), "mica");
+      assert.equal(DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.22631"), "mica");
+      assert.equal(DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.26100"), "mica");
+    });
+
+    it("keeps the solid fallback on older or malformed Windows builds", () => {
+      assert.isUndefined(DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.22000"));
+      assert.isUndefined(DesktopWindow.resolveWindowBackgroundMaterial("win32", "10.0.19045"));
+      assert.isUndefined(DesktopWindow.resolveWindowBackgroundMaterial("win32", ""));
+      assert.isUndefined(DesktopWindow.resolveWindowBackgroundMaterial("win32", "not-a-version"));
+    });
+
+    it("never enables Mica off Windows", () => {
+      assert.isUndefined(DesktopWindow.resolveWindowBackgroundMaterial("darwin", "10.0.22631"));
+      assert.isUndefined(DesktopWindow.resolveWindowBackgroundMaterial("linux", "10.0.22631"));
+    });
+  });
+
+  it.effect("enables the Mica material on Windows 11 22H2+ main windows", () =>
+    Effect.gen(function* () {
+      vi.stubGlobal("process", { ...process, getSystemVersion: () => "10.0.22631" });
+      try {
+        const fakeWindow = makeFakeBrowserWindow();
+        const createCount = yield* Ref.make(0);
+        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+        const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
+        const layer = makeTestLayer({
+          window: fakeWindow.window,
+          createCount,
+          mainWindow,
+          createdWindowOptions,
+          environment: { ...environmentInput, platform: "win32" },
+        });
+
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+          assert.equal(createdWindowOptions[0]?.backgroundMaterial, "mica");
+          assert.isFalse("backgroundColor" in (createdWindowOptions[0] ?? {}));
+          yield* desktopWindow.syncAppearance;
+          assert.deepEqual(fakeWindow.setBackgroundMaterial.mock.calls, [["mica"]]);
+          assert.equal(fakeWindow.setBackgroundColor.mock.calls.length, 0);
+        }).pipe(Effect.provide(layer));
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }),
+  );
+
+  it.effect("keeps the solid fallback background on older Windows", () =>
+    Effect.gen(function* () {
+      vi.stubGlobal("process", { ...process, getSystemVersion: () => "10.0.19045" });
+      try {
+        const fakeWindow = makeFakeBrowserWindow();
+        const createCount = yield* Ref.make(0);
+        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+        const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
+        const layer = makeTestLayer({
+          window: fakeWindow.window,
+          createCount,
+          mainWindow,
+          createdWindowOptions,
+          environment: { ...environmentInput, platform: "win32" },
+        });
+
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+          assert.equal(createdWindowOptions[0]?.backgroundColor, "#ffffff");
+          assert.isFalse("backgroundMaterial" in (createdWindowOptions[0] ?? {}));
+          yield* desktopWindow.syncAppearance;
+          assert.deepEqual(fakeWindow.setBackgroundColor.mock.calls, [["#ffffff"]]);
+          assert.equal(fakeWindow.setBackgroundMaterial.mock.calls.length, 0);
+        }).pipe(Effect.provide(layer));
+      } finally {
+        vi.unstubAllGlobals();
+      }
     }),
   );
 });

@@ -565,6 +565,16 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   body {
     background-color: var(--app-chrome-background);
   }
+  /* Windows desktop (Mica): the DWM draws a translucent backdrop behind the
+     frameless window, so the root chrome stays translucent for the material
+     to tint through. !important wins over the boot-time and theme-sync inline
+     colors; the token itself is remixed translucent at the end of this file,
+     and the workspace surfaces pick up the material through their own remixes
+     there too. */
+  html.electron-windows,
+  html.electron-windows body {
+    background-color: var(--app-chrome-background) !important;
+  }
   body {
     @apply text-foreground relative;
   }
@@ -960,118 +970,18 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     }
   }
 
-  .chat-composer-glass-shell::before {
-    pointer-events: none;
-    position: absolute;
-    z-index: 0;
-    inset: 0;
-    border-radius: 22px;
-    background: color-mix(
-      in srgb,
-      var(--chat-composer-glass-surface) var(--glass-opacity),
-      transparent
-    );
-    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-    content: "";
-  }
-
-  .chat-composer-glass-shell-with-context {
-    --chat-composer-context-extension: 2.25rem;
-  }
-
-  .chat-composer-glass-shell-with-context::before {
-    border-radius: 0;
-    /*
-     * One continuous glass layer: a 22px composer joined to a 16px strip. The
-     * strip is inset 1.375rem per side, so the step-in positions and their
-     * curve controls stay in rem to keep tracking it at non-default interface
-     * font sizes; the composer's 22px top radius and the strip's 16px bottom
-     * radius are px by design.
-     */
-    clip-path: shape(
-      from 0 22px,
-      curve to 22px 0 with 0 9.85px / 9.85px 0,
-      line to calc(100% - 22px) 0,
-      curve to 100% 22px with calc(100% - 9.85px) 0 / 100% 9.85px,
-      line to 100% calc(100% - var(--chat-composer-context-extension) - 1.375rem),
-      curve to calc(100% - 1.375rem) calc(100% - var(--chat-composer-context-extension)) with 100%
-        calc(100% - var(--chat-composer-context-extension) - 0.6156rem) / calc(100% - 0.6156rem)
-        calc(100% - var(--chat-composer-context-extension)),
-      line to calc(100% - 1.375rem) calc(100% - 16px),
-      curve to calc(100% - 1.375rem - 16px) 100% with calc(100% - 1.375rem) calc(100% - 7.16px) /
-        calc(100% - 1.375rem - 7.16px) 100%,
-      line to calc(1.375rem + 16px) 100%,
-      curve to 1.375rem calc(100% - 16px) with calc(1.375rem + 7.16px) 100% / 1.375rem
-        calc(100% - 7.16px),
-      line to 1.375rem calc(100% - var(--chat-composer-context-extension)),
-      curve to 0 calc(100% - var(--chat-composer-context-extension) - 1.375rem) with 0.6156rem
-        calc(100% - var(--chat-composer-context-extension)) / 0
-        calc(100% - var(--chat-composer-context-extension) - 0.6156rem),
-      line to 0 22px,
-      close
-    );
-  }
-
-  @media (min-width: 40rem) {
-    .chat-composer-glass-shell-with-context {
-      /* The xs toolbar controls shrink by 4px at Tailwind's sm breakpoint. */
-      --chat-composer-context-extension: 2rem;
-    }
-  }
-
+  /* Only the input box carries a fill: the composer surface owns the glass,
+     and everything below it (the footer with the model picker and the git
+     context strip) renders transparent on the page background. */
   .chat-composer-glass-host {
-    box-shadow: 0 12px 28px -18px rgb(0 0 0 / 40%);
-
-    @variant dark {
-      box-shadow: none;
-
-      &::after {
-        box-shadow: inset 0 1px var(--chat-composer-highlight);
-      }
-    }
-  }
-
-  .chat-composer-glass-host::after {
-    pointer-events: none;
-    position: absolute;
-    z-index: 1;
-    inset: 0;
-    border: 1px solid var(--chat-composer-outline);
-    border-radius: inherit;
-    content: "";
-  }
-
-  /* A top attachment cannot share the shell's single clipped backdrop: it
-     needs the composer surface and outline to paint in front of its overlap.
-     Split the glass into exact surfaces while a drawer or tab is present; the
-     default composer keeps the cheaper continuous layer. */
-  .chat-composer-glass-shell:is(
-    .chat-composer-glass-shell-attached,
-    :has(:is(.chat-composer-top-drawer, .chat-composer-shoulder-tab))
-  )::before,
-  .chat-composer-glass-shell:is(
-      .chat-composer-glass-shell-attached,
-      :has(:is(.chat-composer-top-drawer, .chat-composer-shoulder-tab))
-    )
-    .chat-composer-glass-host::after {
-    display: none;
-  }
-
-  .chat-composer-glass-shell:is(
-      .chat-composer-glass-shell-attached,
-      :has(:is(.chat-composer-top-drawer, .chat-composer-shoulder-tab))
-    )
-    .chat-composer-glass-host {
     box-shadow: none;
   }
 
-  .chat-composer-glass-shell:is(
-      .chat-composer-glass-shell-attached,
-      :has(:is(.chat-composer-top-drawer, .chat-composer-shoulder-tab))
-    )
-    .chat-composer-glass-host
-    [data-chat-composer-main-surface="true"] {
+  .chat-composer-glass-host::after {
+    display: none;
+  }
+
+  .chat-composer-glass-host [data-chat-composer-main-surface="true"] {
     background: color-mix(
       in srgb,
       var(--chat-composer-glass-surface) var(--glass-opacity),
@@ -1111,122 +1021,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     .chat-composer-glass-host
     [data-chat-composer-mobile-collapsed="true"] {
     min-height: var(--chat-composer-attachment-overlap);
-  }
-
-  .chat-composer-glass-shell-with-context .chat-composer-glass-host::after,
-  .chat-composer-glass-shell-with-context:is(
-      .chat-composer-glass-shell-attached,
-      :has(:is(.chat-composer-top-drawer, .chat-composer-shoulder-tab))
-    )
-    [data-chat-composer-main-surface="true"]::after {
-    /* Keep the attachment seam open; the strip continues the outer outline below. */
-    clip-path: polygon(
-      0 0,
-      100% 0,
-      100% 100%,
-      calc(100% - 22px) 100%,
-      calc(100% - 22px) calc(100% - 2px),
-      22px calc(100% - 2px),
-      22px 100%,
-      0 100%
-    );
-  }
-
-  .chat-composer-context-strip {
-    position: relative;
-    isolation: isolate;
-
-    @variant dark {
-      &::before {
-        border-color: rgb(255 255 255 / 7%);
-        background:
-          linear-gradient(
-            to bottom,
-            transparent 0 1rem,
-            rgb(0 0 0 / 18%) 1rem,
-            transparent calc(1rem + 10px)
-          ),
-          rgb(255 255 255 / 2%);
-        box-shadow: 0 14px 32px -18px rgb(0 0 0 / 75%);
-      }
-    }
-  }
-
-  .chat-composer-context-strip::before {
-    position: absolute;
-    z-index: -1;
-    inset: 0;
-    border: 1px solid var(--chat-composer-outline);
-    border-radius: 0 0 16px 16px;
-    /* Start the strip outline exactly where the composer's 22px curve reaches its tangent. */
-    -webkit-mask-image: linear-gradient(to bottom, transparent 0 1rem, black 1rem);
-    mask-image: linear-gradient(to bottom, transparent 0 1rem, black 1rem);
-    box-shadow: 0 12px 28px -18px rgb(0 0 0 / 40%);
-    content: "";
-  }
-
-  .chat-composer-glass-shell:is(
-      .chat-composer-glass-shell-attached,
-      :has(:is(.chat-composer-top-drawer, .chat-composer-shoulder-tab))
-    )
-    .chat-composer-context-strip {
-    &::before {
-      background: color-mix(
-        in srgb,
-        var(--chat-composer-glass-surface) var(--glass-opacity),
-        transparent
-      );
-      -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-      backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-    }
-
-    @variant dark {
-      &::before {
-        background:
-          linear-gradient(
-            to bottom,
-            transparent 0 1rem,
-            rgb(0 0 0 / 18%) 1rem,
-            transparent calc(1rem + 10px)
-          ),
-          linear-gradient(rgb(255 255 255 / 2%), rgb(255 255 255 / 2%)),
-          color-mix(in srgb, var(--chat-composer-glass-surface) var(--glass-opacity), transparent);
-      }
-    }
-  }
-
-  @supports not (clip-path: shape(from 0 0, line to 1px 1px)) {
-    .chat-composer-glass-shell-with-context::before {
-      inset-block-end: var(--chat-composer-context-extension);
-      border-radius: 22px;
-      clip-path: none;
-    }
-
-    .chat-composer-context-strip::before {
-      background: color-mix(
-        in srgb,
-        var(--chat-composer-glass-surface) var(--glass-opacity),
-        transparent
-      );
-      -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-      backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-    }
-
-    .chat-composer-context-strip {
-      @variant dark {
-        &::before {
-          background:
-            linear-gradient(
-              to bottom,
-              transparent 0 1rem,
-              rgb(0 0 0 / 18%) 1rem,
-              transparent calc(1rem + 10px)
-            ),
-            linear-gradient(rgb(255 255 255 / 2%), rgb(255 255 255 / 2%)),
-            color-mix(in srgb, var(--chat-composer-glass-surface) var(--glass-opacity), transparent);
-        }
-      }
-    }
   }
 
   .settings-slider {
@@ -1341,12 +1135,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     .settings-slider::-moz-range-progress,
     .settings-slider::-moz-range-thumb {
       all: revert;
-    }
-  }
-
-  @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-    .chat-composer-glass-shell::before {
-      background: var(--chat-composer-glass-surface);
     }
   }
 }
@@ -2520,4 +2308,34 @@ code {
   .preview-loading-progress[data-loading="true"] {
     transform: scaleX(0.9);
   }
+}
+
+/* Windows desktop (Mica): the DWM draws a translucent backdrop behind the
+   frameless window. Remix the base surfaces translucent so the sidebar,
+   titlebar, and workspace panels all tint through to the material; overlays
+   (dialogs, popovers) keep their own --card/--popover paints. Unlayered so
+   these beat every palette block above; light-dark() follows the .dark class
+   for the built-in palettes. */
+html.electron-windows {
+  --background: color-mix(
+    in srgb,
+    light-dark(var(--color-zinc-25), var(--color-neutral-950)) 88%,
+    transparent
+  );
+  --app-chrome-background: color-mix(
+    in srgb,
+    light-dark(var(--color-zinc-25), var(--color-neutral-950)) 88%,
+    transparent
+  );
+  --sidebar: color-mix(
+    in srgb,
+    light-dark(var(--color-zinc-50), var(--color-neutral-950)) 88%,
+    transparent
+  );
+}
+
+html.electron-windows[data-theme-id]:not([data-theme-id=""]) {
+  --background: color-mix(in srgb, var(--app-theme-canvas) 88%, transparent);
+  --app-chrome-background: color-mix(in srgb, var(--app-theme-chrome) 88%, transparent);
+  --sidebar: color-mix(in srgb, var(--app-theme-sidebar) 88%, transparent);
 }

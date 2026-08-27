@@ -63,6 +63,7 @@ describe("ElectronWindow", () => {
         frame: true,
         transparent: false,
         backgroundColor: "#101010",
+        backgroundMaterial: "mica",
         icon: {} as Electron.NativeImage,
         webPreferences: {
           preload: "/tmp/preload.js",
@@ -91,6 +92,7 @@ describe("ElectronWindow", () => {
         frame: true,
         transparent: false,
         backgroundColor: "#101010",
+        backgroundMaterial: "mica",
         webPreferences: {
           preload: "/tmp/preload.js",
           partition: "persist:t3code-preview-test",

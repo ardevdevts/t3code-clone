@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 import { EventId, type OrchestrationThreadActivity, TurnId } from "@t3tools/contracts";
 
-import { deriveLatestContextWindowSnapshot, formatContextWindowTokens } from "./contextWindow";
+import {
+  deriveLatestContextWindowSnapshot,
+  formatContextWindowCost,
+  formatContextWindowTokens,
+} from "./contextWindow";
 
 function makeActivity(id: string, kind: string, payload: unknown): OrchestrationThreadActivity {
   return {
@@ -82,5 +86,24 @@ describe("contextWindow", () => {
 
     expect(snapshot?.usedTokens).toBe(81_659);
     expect(snapshot?.totalProcessedTokens).toBe(748_126);
+  });
+
+  it("derives the cumulative session cost when reported", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.updated", {
+        usedTokens: 81_659,
+        cost: 0.42,
+      }),
+    ]);
+
+    expect(snapshot?.cost).toBe(0.42);
+  });
+
+  it("formats session cost", () => {
+    expect(formatContextWindowCost(0.0012)).toBe("$0.0012");
+    expect(formatContextWindowCost(0.42)).toBe("$0.42");
+    expect(formatContextWindowCost(12.5)).toBe("$12.50");
+    expect(formatContextWindowCost(null)).toBe("$0.00");
+    expect(formatContextWindowCost(0)).toBe("$0.00");
   });
 });

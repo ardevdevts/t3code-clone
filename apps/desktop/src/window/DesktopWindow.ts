@@ -129,6 +129,28 @@ function getInitialWindowBackgroundColor(shouldUseDarkColors: boolean): string {
   return shouldUseDarkColors ? "#0a0a0a" : "#ffffff";
 }
 
+// Windows 11 22H2 (build 22621) and later can draw DWM system backdrops
+// (Mica) behind frameless windows. Older Windows and other platforms keep the
+// solid fallback background color so the window never renders transparent.
+const MICA_MIN_WINDOWS_BUILD = 22621;
+
+export function resolveWindowBackgroundMaterial(
+  platform: NodeJS.Platform,
+  systemVersion: string,
+): "mica" | undefined {
+  if (platform !== "win32") {
+    return undefined;
+  }
+  const build = Number(systemVersion.split(".")[2] ?? 0);
+  return Number.isFinite(build) && build >= MICA_MIN_WINDOWS_BUILD ? "mica" : undefined;
+}
+
+function getWindowBackgroundMaterial(platform: NodeJS.Platform): "mica" | undefined {
+  const systemVersion =
+    typeof process.getSystemVersion === "function" ? process.getSystemVersion() : "";
+  return resolveWindowBackgroundMaterial(platform, systemVersion);
+}
+
 type DisplayBounds = Pick<Electron.Rectangle, "x" | "y" | "width" | "height">;
 
 function windowFitsWithinDisplay(
@@ -238,7 +260,12 @@ function syncWindowAppearance(
       return;
     }
 
-    window.setBackgroundColor(getInitialWindowBackgroundColor(shouldUseDarkColors));
+    const backgroundMaterial = getWindowBackgroundMaterial(platform);
+    if (backgroundMaterial === undefined) {
+      window.setBackgroundColor(getInitialWindowBackgroundColor(shouldUseDarkColors));
+    } else {
+      window.setBackgroundMaterial(backgroundMaterial);
+    }
     const { titleBarOverlay } = getWindowTitleBarOptions(shouldUseDarkColors, platform);
     if (typeof titleBarOverlay === "object") {
       window.setTitleBarOverlay(titleBarOverlay);
@@ -322,6 +349,7 @@ export const make = Effect.gen(function* () {
     const applicationUrl = getDesktopUrl(environment.isDevelopment);
     const iconPaths = yield* assets.iconPaths;
     const iconOption = getIconOption(iconPaths, environment.platform);
+    const backgroundMaterial = getWindowBackgroundMaterial(environment.platform);
     const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
     const persistedSettings = yield* desktopSettings.get;
     const persistedBounds = persistedSettings.mainWindowBounds;
@@ -353,7 +381,9 @@ export const make = Effect.gen(function* () {
       show: false,
       autoHideMenuBar: true,
       ...(environment.platform === "darwin" ? { disableAutoHideCursor: true } : {}),
-      backgroundColor: getInitialWindowBackgroundColor(shouldUseDarkColors),
+      ...(backgroundMaterial === undefined
+        ? { backgroundColor: getInitialWindowBackgroundColor(shouldUseDarkColors) }
+        : { backgroundMaterial }),
       ...iconOption,
       title: environment.displayName,
       ...getWindowTitleBarOptions(shouldUseDarkColors, environment.platform),
