@@ -33,7 +33,7 @@ describe("buildThreadActionMenuItems", () => {
         ...baseState,
         supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
       }),
-    ).toEqual(["rename", "mark-unread", "copy", "archive", "delete"]);
+    ).toEqual(["rename", "mark-unread", "copy", "copy-markdown", "archive", "delete"]);
   });
 
   it("includes branch items only for threads with a branch", () => {
