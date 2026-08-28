@@ -59,6 +59,7 @@ interface BranchToolbarProps {
   availableEnvironments?: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
   compact?: boolean;
+  showBranchSelector?: boolean;
 }
 
 interface MobileRunContextSelectorProps {
@@ -403,6 +404,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   availableEnvironments,
   onEnvironmentChange,
   compact,
+  showBranchSelector = true,
 }: BranchToolbarProps) {
   const threadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
@@ -484,7 +486,7 @@ export const BranchToolbar = memo(function BranchToolbar({
       ref={setStripElement}
       data-compact={labelsOverflow ? "" : undefined}
       className={cn(
-        "group/composer-context flex items-center gap-2 overflow-x-clip overflow-y-visible ps-1 pe-2",
+        "group/composer-context flex items-center gap-2 overflow-x-clip overflow-y-visible px-3 sm:px-4",
         compact
           ? "min-w-0"
           : "chat-composer-context-strip -mt-4 mx-auto w-[calc(100%-2.75rem)] max-w-[calc(48rem-2.75rem)] pt-5 pb-1",
@@ -507,7 +509,7 @@ export const BranchToolbar = memo(function BranchToolbar({
           compact={compact ?? false}
         />
       ) : (
-        <div className="flex min-w-0 flex-1 items-center gap-1">
+        <div className="flex min-w-0 shrink-0 items-center gap-1">
           {showEnvironmentIndicator && availableEnvironments && (
             <>
               <BranchToolbarEnvironmentSelector
@@ -540,9 +542,9 @@ export const BranchToolbar = memo(function BranchToolbar({
         </div>
       )}
 
-      {showGitControls ? (
+      {showGitControls && showBranchSelector ? (
         <BranchToolbarBranchSelector
-          className="min-w-0 flex-1 justify-end md:ml-auto md:flex-none"
+          className="min-w-0 flex-1"
           environmentId={environmentId}
           threadId={threadId}
           {...(draftId ? { draftId } : {})}

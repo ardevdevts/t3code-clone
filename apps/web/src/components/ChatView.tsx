@@ -277,6 +277,7 @@ import {
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import { BranchToolbar } from "./BranchToolbar";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -553,6 +554,10 @@ function formatOutgoingPrompt(params: {
   const promptEffort = resolvePromptInjectedEffort(caps, params.effort);
   return applyClaudePromptEffortPrefix(params.text, promptEffort);
 }
+/* Distance above the composer overlay the bottom fade needs so its gradient
+   can complete exactly at the overlay's top edge. Keep in sync with the
+   --chat-composer-fade-lead used by .chat-composer-bottom-fade. */
+const COMPOSER_BOTTOM_FADE_LEAD_PX = 96;
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
 
@@ -6933,6 +6938,13 @@ function ChatViewContent(props: ChatViewProps) {
                 topFadeEnabled={!hasTimelineTopBanner}
                 loadEarlier={loadEarlierTurns}
               />
+              <div
+                aria-hidden="true"
+                className="chat-composer-bottom-fade pointer-events-none absolute inset-x-0 bottom-0 z-10"
+                style={{
+                  height: composerOverlayHeight + COMPOSER_BOTTOM_FADE_LEAD_PX,
+                }}
+              />
 
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}
               {showScrollToBottom && (
@@ -7008,6 +7020,36 @@ function ChatViewContent(props: ChatViewProps) {
                         externalComposerDrawerAttached && "chat-composer-glass-shell-attached",
                       )}
                     >
+                      {isGitRepo && activeProject !== null ? (
+                        <div className="pointer-events-auto relative z-10 -mt-4 mx-auto w-full max-w-3xl overflow-x-clip overflow-y-visible pt-5 pb-1">
+                          <BranchToolbar
+                            environmentId={environmentId}
+                            threadId={activeThread.id}
+                            showGitControls={isGitRepo}
+                            {...(routeKind === "draft" && draftId ? { draftId } : {})}
+                            onEnvModeChange={onEnvModeChange}
+                            startFromOrigin={startFromOrigin}
+                            onStartFromOriginChange={onStartFromOriginChange}
+                            {...(canOverrideServerThreadEnvMode
+                              ? { effectiveEnvModeOverride: envMode }
+                              : {})}
+                            {...(canOverrideServerThreadEnvMode
+                              ? {
+                                  activeThreadBranchOverride: activeThreadBranch,
+                                  onActiveThreadBranchOverrideChange: setPendingServerThreadBranch,
+                                }
+                              : {})}
+                            envLocked={envLocked}
+                            onComposerFocusRequest={scheduleComposerFocus}
+                            {...(canCheckoutPullRequestIntoThread
+                              ? { onCheckoutPullRequestRequest: openPullRequestDialog }
+                              : {})}
+                            {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
+                            availableEnvironments={logicalProjectEnvironments}
+                            compact
+                          />
+                        </div>
+                      ) : null}
                       <div className="chat-composer-glass-host relative z-10 w-full rounded-[22px]">
                         <div ref={attachDraftHeroComposerAnchorRef} className="relative z-10">
                           <ChatComposer
@@ -7095,20 +7137,6 @@ function ChatViewContent(props: ChatViewProps) {
                             scheduleComposerFocus={scheduleComposerFocus}
                             setThreadError={setThreadError}
                             onExpandImage={onExpandTimelineImage}
-                            showGitControls={isGitRepo}
-                            onEnvModeChange={onEnvModeChange}
-                            startFromOrigin={startFromOrigin}
-                            onStartFromOriginChange={onStartFromOriginChange}
-                            canOverrideServerThreadEnvMode={canOverrideServerThreadEnvMode}
-                            envModeOverride={envMode}
-                            activeThreadBranch={activeThreadBranch}
-                            onActiveThreadBranchOverrideChange={setPendingServerThreadBranch}
-                            envLocked={envLocked}
-                            canCheckoutPullRequestIntoThread={canCheckoutPullRequestIntoThread}
-                            openPullRequestDialog={openPullRequestDialog}
-                            hasMultipleEnvironments={hasMultipleEnvironments}
-                            onEnvironmentChange={onEnvironmentChange}
-                            logicalProjectEnvironments={logicalProjectEnvironments}
                           />
                         </div>
                       </div>

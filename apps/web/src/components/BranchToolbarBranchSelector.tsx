@@ -66,7 +66,7 @@ import {
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
-interface BranchToolbarBranchSelectorProps {
+export interface BranchToolbarBranchSelectorProps {
   className?: string;
   environmentId: EnvironmentId;
   threadId: ThreadId;

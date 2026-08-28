@@ -1016,6 +1016,24 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     }
   }
 
+  .chat-composer-bottom-fade {
+    /* The element's height is the composer overlay plus the fade lead above
+       it, so the gradient completes exactly at the overlay's top edge and
+       stays solid behind the composer — messages vanish as they slide behind
+       it instead of fading out at the bottom of the screen. Keep the lead in
+       sync with COMPOSER_BOTTOM_FADE_LEAD_PX in ChatView.tsx. */
+    --chat-composer-fade-lead: 96px;
+    background: linear-gradient(
+      to bottom,
+      transparent 0,
+      color-mix(in srgb, var(--background) 18%, transparent)
+        calc(var(--chat-composer-fade-lead) * 0.35),
+      color-mix(in srgb, var(--background) 72%, transparent)
+        calc(var(--chat-composer-fade-lead) * 0.75),
+      var(--background) var(--chat-composer-fade-lead)
+    );
+  }
+
   .chat-composer-glass-shell:is(
       .chat-composer-glass-shell-attached,
       :has(.chat-composer-top-drawer)

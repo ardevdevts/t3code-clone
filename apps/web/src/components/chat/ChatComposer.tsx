@@ -53,7 +53,6 @@ import {
 import {
   type ComposerImageAttachment,
   type DraftId,
-  type DraftThreadEnvMode,
   type PersistedComposerImageAttachment,
   hydrateImagesFromPersisted,
   useComposerDraftStore,
@@ -110,8 +109,6 @@ import {
 } from "../composerFooterLayout";
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
 import { ProviderModelPicker } from "./ProviderModelPicker";
-import { BranchToolbar } from "../BranchToolbar";
-import { type EnvMode, type EnvironmentOption } from "../BranchToolbar.logic";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
@@ -666,22 +663,6 @@ export interface ChatComposerProps {
   scheduleComposerFocus: () => void;
   setThreadError: (threadId: ThreadId | null, error: string | null) => void;
   onExpandImage: (preview: ExpandedImagePreview) => void;
-
-  // Branch toolbar
-  showGitControls: boolean;
-  onEnvModeChange: (mode: EnvMode) => void;
-  startFromOrigin: boolean;
-  onStartFromOriginChange: (startFromOrigin: boolean) => void;
-  canOverrideServerThreadEnvMode: boolean;
-  envModeOverride: DraftThreadEnvMode;
-  activeThreadBranch: string | null;
-  onActiveThreadBranchOverrideChange: (branch: string | null) => void;
-  envLocked: boolean;
-  canCheckoutPullRequestIntoThread: boolean;
-  openPullRequestDialog: (reference: string) => void;
-  hasMultipleEnvironments: boolean;
-  onEnvironmentChange: (environmentId: EnvironmentId) => void;
-  logicalProjectEnvironments: readonly EnvironmentOption[];
 }
 
 // --------------------------------------------------------------------------
@@ -759,20 +740,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     scheduleComposerFocus,
     setThreadError,
     onExpandImage,
-    showGitControls,
-    onEnvModeChange,
-    startFromOrigin,
-    onStartFromOriginChange,
-    canOverrideServerThreadEnvMode,
-    envModeOverride,
-    activeThreadBranch,
-    onActiveThreadBranchOverrideChange,
-    envLocked,
-    canCheckoutPullRequestIntoThread,
-    openPullRequestDialog,
-    hasMultipleEnvironments,
-    onEnvironmentChange,
-    logicalProjectEnvironments,
   } = props;
   // ------------------------------------------------------------------
   // Store subscriptions (prompt / images / terminal contexts)
@@ -3571,38 +3538,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 </>
               )}
             </div>
-
-            {/* Keep the git/environment controls in the same external row as the model and mode controls. */}
-            {activeThreadId && (
-              <div className="flex shrink-0 items-center">
-                <BranchToolbar
-                  environmentId={environmentId}
-                  threadId={activeThreadId}
-                  showGitControls={showGitControls}
-                  {...(routeKind === "draft" && draftId ? { draftId } : {})}
-                  onEnvModeChange={onEnvModeChange}
-                  startFromOrigin={startFromOrigin}
-                  onStartFromOriginChange={onStartFromOriginChange}
-                  {...(canOverrideServerThreadEnvMode
-                    ? { effectiveEnvModeOverride: envModeOverride }
-                    : {})}
-                  {...(canOverrideServerThreadEnvMode
-                    ? {
-                        activeThreadBranchOverride: activeThreadBranch,
-                        onActiveThreadBranchOverrideChange: onActiveThreadBranchOverrideChange,
-                      }
-                    : {})}
-                  envLocked={envLocked}
-                  onComposerFocusRequest={scheduleComposerFocus}
-                  {...(canCheckoutPullRequestIntoThread
-                    ? { onCheckoutPullRequestRequest: openPullRequestDialog }
-                    : {})}
-                  {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
-                  availableEnvironments={logicalProjectEnvironments}
-                  compact
-                />
-              </div>
-            )}
 
             {/* Right side: send / stop button */}
             <div
