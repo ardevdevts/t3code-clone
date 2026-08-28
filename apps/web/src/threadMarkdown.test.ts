@@ -3,18 +3,23 @@ import { describe, expect, it } from "vite-plus/test";
 import { buildThreadMarkdown } from "./threadMarkdown";
 
 const makeMessage = (
-  overrides: Partial<{ role: "user" | "assistant" | "system"; text: string; attachments: Array<{ type: "image"; name: string }> }>,
-) => ({
-  id: "msg_test",
-  turnId: null,
-  streaming: false,
-  createdAt: "2026-01-01T00:00:00.000Z",
-  updatedAt: "2026-01-01T00:00:00.000Z",
-  ...overrides,
-  role: overrides.role ?? "user",
-  text: overrides.text ?? "",
-  attachments: overrides.attachments ?? [],
-}) as any;
+  overrides: Partial<{
+    role: "user" | "assistant" | "system";
+    text: string;
+    attachments: Array<{ type: "image"; name: string }>;
+  }>,
+) =>
+  ({
+    id: "msg_test",
+    turnId: null,
+    streaming: false,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+    role: overrides.role ?? "user",
+    text: overrides.text ?? "",
+    attachments: overrides.attachments ?? [],
+  }) as any;
 
 describe("buildThreadMarkdown", () => {
   it("builds a markdown document with a heading for each role", () => {

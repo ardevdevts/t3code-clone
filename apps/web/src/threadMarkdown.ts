@@ -58,9 +58,10 @@ export function buildThreadMarkdown(input: {
  * session — falls back to the HTTP thread-snapshot endpoint which returns the
  * full conversation regardless of client subscription state.
  */
-async function resolveThreadForExport(
-  ref: ScopedThreadRef,
-): Promise<{ readonly title: string; readonly messages: ReadonlyArray<OrchestrationMessage> } | null> {
+async function resolveThreadForExport(ref: ScopedThreadRef): Promise<{
+  readonly title: string;
+  readonly messages: ReadonlyArray<OrchestrationMessage>;
+} | null> {
   // Fast path: the thread detail is already cached locally.
   const cached = readThreadDetail(ref);
   if (cached !== null) {
@@ -94,9 +95,7 @@ async function resolveThreadForExport(
  * Resolves against the server via HTTP for the authoritative snapshot, falling
  * back to the locally cached detail when the connection is unavailable.
  */
-export async function copyThreadAsMarkdownToClipboard(
-  ref: ScopedThreadRef,
-): Promise<boolean> {
+export async function copyThreadAsMarkdownToClipboard(ref: ScopedThreadRef): Promise<boolean> {
   const thread = await resolveThreadForExport(ref);
   if (thread === null) return false;
   const markdown = buildThreadMarkdown(thread);
