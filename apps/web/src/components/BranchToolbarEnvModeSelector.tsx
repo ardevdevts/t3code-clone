@@ -16,6 +16,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "./ui/select";
+import { ComposerControlChevron } from "./chat/ComposerControl";
+import { cn } from "../lib/utils";
 
 export const PREVIOUS_WORKTREE_SELECT_VALUE = "previous-worktree";
 
@@ -26,6 +28,7 @@ interface BranchToolbarEnvModeSelectorProps {
   onEnvModeChange: (mode: EnvMode) => void;
   previousWorktreeLabel?: string | null;
   onUsePreviousWorktree?: () => void;
+  compact: boolean;
 }
 
 export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSelector({
@@ -35,6 +38,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   onEnvModeChange,
   previousWorktreeLabel,
   onUsePreviousWorktree,
+  compact,
 }: BranchToolbarEnvModeSelectorProps) {
   const showPreviousWorktree = Boolean(previousWorktreeLabel && onUsePreviousWorktree);
   const envModeItems = useMemo(
@@ -51,17 +55,20 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   if (envLocked) {
     return (
       <span
-        className="inline-flex h-7 shrink-0 items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-[14px] font-medium text-muted-foreground/70 sm:h-6 sm:text-[13px]"
+        className={cn(
+          "inline-flex shrink-0 items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-[14px] font-medium text-muted-foreground/70",
+          compact ? "h-7" : "h-7 sm:h-6 sm:text-[13px]",
+        )}
         data-composer-context-control
       >
         {activeWorktreePath ? (
           <>
-            <FolderGitIcon className="size-3" />
+            <FolderGitIcon className={compact ? "size-4" : "size-3"} />
             {resolveLockedWorkspaceLabel(activeWorktreePath)}
           </>
         ) : (
           <>
-            <FolderIcon className="size-3" />
+            <FolderIcon className={compact ? "size-4" : "size-3"} />
             {resolveLockedWorkspaceLabel(activeWorktreePath)}
           </>
         )}
@@ -85,16 +92,20 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
       <SelectTrigger
         variant="ghost"
         size="xs"
-        className="min-w-0 shrink font-medium"
+        icon={compact ? <ComposerControlChevron /> : undefined}
+        className={cn(
+          "min-w-0 shrink font-medium",
+          compact && "h-7 min-h-7 text-[14px] sm:text-[14px]",
+        )}
         aria-label="Workspace"
         data-composer-context-control
       >
         {effectiveEnvMode === "worktree" ? (
-          <FolderGit2Icon className="size-3" />
+          <FolderGit2Icon className={compact ? "size-4" : "size-3"} />
         ) : activeWorktreePath ? (
-          <FolderGitIcon className="size-3" />
+          <FolderGitIcon className={compact ? "size-4" : "size-3"} />
         ) : (
-          <FolderIcon className="size-3" />
+          <FolderIcon className={compact ? "size-4" : "size-3"} />
         )}
         <span
           data-composer-label

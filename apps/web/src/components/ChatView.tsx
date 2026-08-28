@@ -287,11 +287,7 @@ import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayo
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import { WorkspacePageHeader } from "./WorkspacePageHeader";
-import {
-  resolveEffectiveEnvMode,
-  resolveLocalCheckoutBranchMismatch,
-  shouldShowEnvironmentIndicator,
-} from "./BranchToolbar.logic";
+import { resolveEffectiveEnvMode, resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   getProviderStatusBannerKey,
   ProviderStatusBanner,
@@ -317,6 +313,8 @@ import {
 } from "./chat/ContextWindowMeter.logic";
 import { deriveLatestContextWindowSnapshot, formatContextWindowTokens } from "../lib/contextWindow";
 import { ThreadSyncStatusPill } from "./chat/ThreadSyncStatusPill";
+import { useDelayedReveal } from "../hooks/useDelayedReveal";
+import { THREAD_SYNC_REVEAL_DELAY_MS } from "../threadSync";
 import {
   DRAFT_HERO_TRANSITION_ANIMATION_ID,
   DRAFT_HERO_TRANSITION_DURATION_MS,
@@ -1269,6 +1267,11 @@ function ChatViewContent(props: ChatViewProps) {
   const draftId = routeKind === "draft" ? props.draftId : null;
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
+  // The pill only appears once a sync has outlasted the reveal window, so a
+  // brief re-sync on refocus does not flash it. The empty-placeholder loading
+  // state stays driven by the raw phase; only the pill and its drawer attach
+  // follow the delayed value.
+  const revealedThreadSyncPhase = useDelayedReveal(threadSyncPhase, THREAD_SYNC_REVEAL_DELAY_MS);
   const handleNewThread = useNewThreadHandler();
   const { settleThread } = useThreadActions();
   const routeThreadRef = useMemo(
@@ -1986,14 +1989,6 @@ function ChatViewContent(props: ChatViewProps) {
     return envs;
   }, [activeProject, allProjects, projectGroupingSettings, primaryEnvironmentId, environmentById]);
   const hasMultipleEnvironments = logicalProjectEnvironments.length > 1;
-  const activeEnvironmentOption =
-    logicalProjectEnvironments.find(
-      (environment) => environment.environmentId === activeThread?.environmentId,
-    ) ?? null;
-  const showComposerEnvironmentIndicator = shouldShowEnvironmentIndicator({
-    activeEnvironment: activeEnvironmentOption,
-    canPickEnvironment: hasMultipleEnvironments,
-  });
 
   const openPullRequestDialog = useCallback(
     (reference?: string) => {
@@ -6810,7 +6805,8 @@ function ChatViewContent(props: ChatViewProps) {
     addFiles: (files) => composerRef.current?.addDroppedFiles(files),
   });
   const externalComposerDrawerAttached =
-    composerBannerItems.length > 0 || Boolean(threadSyncPhase && !activeEnvironmentUnavailable);
+    composerBannerItems.length > 0 ||
+    Boolean(revealedThreadSyncPhase && !activeEnvironmentUnavailable);
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
@@ -6995,8 +6991,8 @@ function ChatViewContent(props: ChatViewProps) {
                   ) : (
                     <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
                   )}
-                  {threadSyncPhase && !activeEnvironmentUnavailable ? (
-                    <ThreadSyncStatusPill phase={threadSyncPhase} />
+                  {revealedThreadSyncPhase && !activeEnvironmentUnavailable ? (
+                    <ThreadSyncStatusPill phase={revealedThreadSyncPhase} />
                   ) : null}
                   <div
                     className="relative"
@@ -7007,7 +7003,10 @@ function ChatViewContent(props: ChatViewProps) {
                     }
                   >
                     <div
-                        className="chat-composer-glass-shell relative z-10 w-full rounded-[22px]"
+                      className={cn(
+                        "chat-composer-glass-shell relative mx-auto w-full max-w-3xl",
+                        externalComposerDrawerAttached && "chat-composer-glass-shell-attached",
+                      )}
                     >
                       <div className="chat-composer-glass-host relative z-10 w-full rounded-[22px]">
                         <div ref={attachDraftHeroComposerAnchorRef} className="relative z-10">
@@ -7096,7 +7095,22 @@ function ChatViewContent(props: ChatViewProps) {
                             scheduleComposerFocus={scheduleComposerFocus}
                             setThreadError={setThreadError}
                             onExpandImage={onExpandTimelineImage}
+                            showGitControls={isGitRepo}
+                            onEnvModeChange={onEnvModeChange}
+                            startFromOrigin={startFromOrigin}
+                            onStartFromOriginChange={onStartFromOriginChange}
+                            canOverrideServerThreadEnvMode={canOverrideServerThreadEnvMode}
+                            envModeOverride={envMode}
+                            activeThreadBranch={activeThreadBranch}
+                            onActiveThreadBranchOverrideChange={setPendingServerThreadBranch}
+                            envLocked={envLocked}
+                            canCheckoutPullRequestIntoThread={canCheckoutPullRequestIntoThread}
+                            openPullRequestDialog={openPullRequestDialog}
+                            hasMultipleEnvironments={hasMultipleEnvironments}
+                            onEnvironmentChange={onEnvironmentChange}
+                            logicalProjectEnvironments={logicalProjectEnvironments}
                           />
+                        </div>
                       </div>
                     </div>
                     <div

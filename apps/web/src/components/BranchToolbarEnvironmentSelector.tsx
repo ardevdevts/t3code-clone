@@ -3,6 +3,7 @@ import { CloudIcon, MonitorIcon } from "lucide-react";
 import { memo, useMemo } from "react";
 
 import type { EnvironmentOption } from "./BranchToolbar.logic";
+import { ComposerControlChevron } from "./chat/ComposerControl";
 import {
   Select,
   SelectGroup,
@@ -12,11 +13,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "./ui/select";
+import { cn } from "../lib/utils";
 
 interface BranchToolbarEnvironmentSelectorProps {
   envLocked: boolean;
   environmentId: EnvironmentId;
   availableEnvironments: readonly EnvironmentOption[];
+  compact: boolean;
   // Absent when there is only one environment to show: the indicator still
   // renders (as a static label) so remote projects are always identifiable.
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
@@ -26,6 +29,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
   envLocked,
   environmentId,
   availableEnvironments,
+  compact,
   onEnvironmentChange,
 }: BranchToolbarEnvironmentSelectorProps) {
   const activeEnvironment = useMemo(() => {
@@ -49,13 +53,16 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
   if (envLocked || onEnvironmentChange === undefined) {
     return (
       <span
-        className="inline-flex h-7 min-w-0 max-w-full items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70 sm:h-6 sm:text-xs"
+        className={cn(
+          "inline-flex min-w-0 max-w-full items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70",
+          compact ? "h-7 text-[14px]" : "h-7 sm:h-6 sm:text-xs",
+        )}
         data-composer-context-control
       >
         {activeEnvironment?.isPrimary ? (
-          <MonitorIcon className="size-3 shrink-0" />
+          <MonitorIcon className={cn(compact ? "size-4" : "size-3", "shrink-0")} />
         ) : (
-          <CloudIcon className="size-3 shrink-0" />
+          <CloudIcon className={cn(compact ? "size-4" : "size-3", "shrink-0")} />
         )}
         <span
           data-composer-label
@@ -82,14 +89,18 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
       <SelectTrigger
         variant="ghost"
         size="xs"
-        className="min-w-0 max-w-full font-medium"
+        icon={compact ? <ComposerControlChevron /> : undefined}
+        className={cn(
+          "min-w-0 max-w-full font-medium",
+          compact && "h-7 min-h-7 text-[14px] sm:text-[14px]",
+        )}
         aria-label="Run on"
         data-composer-context-control
       >
         {activeEnvironment?.isPrimary ? (
-          <MonitorIcon className="size-3 shrink-0" />
+          <MonitorIcon className={cn(compact ? "size-4" : "size-3", "shrink-0")} />
         ) : (
-          <CloudIcon className="size-3 shrink-0" />
+          <CloudIcon className={cn(compact ? "size-4" : "size-3", "shrink-0")} />
         )}
         <span
           data-composer-label

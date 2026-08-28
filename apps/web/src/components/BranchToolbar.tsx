@@ -74,6 +74,7 @@ interface MobileRunContextSelectorProps {
   onEnvModeChange: (mode: EnvMode) => void;
   previousWorktreeLabel: string | null;
   onUsePreviousWorktree: () => void;
+  compact: boolean;
 }
 
 const MobileRunContextSelector = memo(function MobileRunContextSelector({
@@ -89,6 +90,7 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
   onEnvModeChange,
   previousWorktreeLabel,
   onUsePreviousWorktree,
+  compact,
 }: MobileRunContextSelectorProps) {
   const activeEnvironment = useMemo(
     () => availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null,
@@ -107,15 +109,16 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
       : resolveCurrentWorkspaceLabel(activeWorktreePath);
   const isLocked = envLocked || envModeLocked;
   const EnvironmentIcon = activeEnvironment?.isPrimary ? MonitorIcon : CloudIcon;
+  const controlIconClassName = compact ? "size-4" : "size-3";
   const icon = showEnvironmentIndicator ? (
     // Button's base styles apply `-mx-0.5` to descendant SVGs, which eats 4px
     // out of whatever gap we set. mx-0! cancels that so gap-0.5 reads as 2px.
     <span className="inline-flex shrink-0 items-center gap-0.5">
-      <EnvironmentIcon className="size-3 shrink-0 mx-0!" />
-      <WorkspaceIcon className="size-3 shrink-0 mx-0!" />
+      <EnvironmentIcon className={cn(controlIconClassName, "shrink-0 mx-0!")} />
+      <WorkspaceIcon className={cn(controlIconClassName, "shrink-0 mx-0!")} />
     </span>
   ) : (
-    <WorkspaceIcon className="size-3 shrink-0" />
+    <WorkspaceIcon className={cn(controlIconClassName, "shrink-0")} />
   );
   const triggerContent = (
     <>
@@ -128,7 +131,12 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
 
   if (isLocked) {
     return (
-      <span className="inline-flex h-7 min-w-0 max-w-[48%] flex-1 items-center justify-start gap-1 rounded-md border border-transparent px-[calc(--spacing(2)-1px)] text-sm font-medium text-muted-foreground/70 sm:h-6 md:hidden">
+      <span
+        className={cn(
+          "inline-flex min-w-0 max-w-[48%] flex-1 items-center justify-start gap-1 rounded-md border border-transparent px-[calc(--spacing(2)-1px)] text-sm font-medium text-muted-foreground/70 md:hidden",
+          compact ? "h-7 text-[14px]" : "h-7 sm:h-6",
+        )}
+      >
         {triggerContent}
       </span>
     );
@@ -138,10 +146,13 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
     <Menu>
       <MenuTrigger
         render={<Button variant="ghost" size="xs" />}
-        className="min-w-0 max-w-[48%] flex-1 justify-start text-muted-foreground/70 hover:text-foreground/80 md:hidden"
+        className={cn(
+          "min-w-0 max-w-[48%] flex-1 justify-start text-muted-foreground/70 hover:text-foreground/80 md:hidden",
+          compact && "h-7 min-h-7 text-[14px]",
+        )}
       >
         {triggerContent}
-        <ChevronDownIcon className="size-3 shrink-0 opacity-50" />
+        <ChevronDownIcon className={cn(compact ? "size-3.5" : "size-3", "shrink-0 opacity-50")} />
       </MenuTrigger>
       <MenuPopup align="start" side="top" className="w-64">
         {showEnvironmentPicker && availableEnvironments && onEnvironmentChange ? (
@@ -493,6 +504,7 @@ export const BranchToolbar = memo(function BranchToolbar({
           onEnvModeChange={onEnvModeChange}
           previousWorktreeLabel={previousWorktreeLabel}
           onUsePreviousWorktree={onUsePreviousWorktree}
+          compact={compact ?? false}
         />
       ) : (
         <div className="flex min-w-0 flex-1 items-center gap-1">
@@ -502,6 +514,7 @@ export const BranchToolbar = memo(function BranchToolbar({
                 envLocked={envLocked}
                 environmentId={environmentId}
                 availableEnvironments={availableEnvironments}
+                compact={compact ?? false}
                 {...(showEnvironmentPicker && onEnvironmentChange ? { onEnvironmentChange } : {})}
               />
               {showGitControls ? (
@@ -521,6 +534,7 @@ export const BranchToolbar = memo(function BranchToolbar({
               onEnvModeChange={onEnvModeChange}
               previousWorktreeLabel={previousWorktreeLabel}
               onUsePreviousWorktree={onUsePreviousWorktree}
+              compact={compact ?? false}
             />
           ) : null}
         </div>
@@ -540,6 +554,7 @@ export const BranchToolbar = memo(function BranchToolbar({
           onStartFromOriginChange={onStartFromOriginChange}
           {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
           {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
+          compact={compact ?? false}
         />
       ) : null}
     </div>

@@ -79,6 +79,7 @@ interface BranchToolbarBranchSelectorProps {
   onStartFromOriginChange: (startFromOrigin: boolean) => void;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
+  compact?: boolean;
 }
 
 function toBranchActionErrorMessage(error: unknown): string {
@@ -98,6 +99,7 @@ export function BranchToolbarBranchSelector({
   onStartFromOriginChange,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
+  compact,
 }: BranchToolbarBranchSelectorProps) {
   const startFromOriginSwitchId = useId();
   const stopThreadSession = useAtomCommand(threadEnvironment.stopSession, "thread session stop");
@@ -759,10 +761,13 @@ export function BranchToolbarBranchSelector({
         >
           <ComboboxTrigger
             render={<Button variant="ghost" size="xs" />}
-            className="min-w-0 max-w-full text-[14px] font-medium text-muted-foreground/70 hover:text-foreground/80 sm:text-[13px]"
+            className={cn(
+              "min-w-0 max-w-full font-medium text-muted-foreground/70 hover:text-foreground/80",
+              compact ? "h-7 min-h-7 text-[14px] sm:text-[14px]" : "text-[14px] sm:text-[13px]",
+            )}
             disabled={isInitialBranchesLoadPending || isBranchActionPending}
           >
-            <GitBranchIcon className="size-3 shrink-0 opacity-70" />
+            <GitBranchIcon className={cn(compact ? "size-4" : "size-3", "shrink-0 opacity-70")} />
             <span
               data-composer-label
               className="min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0"
@@ -774,7 +779,9 @@ export function BranchToolbarBranchSelector({
                 {triggerLabel}
               </span>
             </span>
-            <ChevronDownIcon className="size-3 shrink-0 opacity-50" />
+            <ChevronDownIcon
+              className={cn(compact ? "size-3.5" : "size-3", "shrink-0 opacity-50")}
+            />
           </ComboboxTrigger>
         </span>
       </div>
