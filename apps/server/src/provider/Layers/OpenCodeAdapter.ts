@@ -455,8 +455,9 @@ interface OpenCodeSessionContext {
   cumulativeSessionCost: number | undefined;
   /**
    * Context-window size resolved once per model from the catalog
-   * (`v2/model` list). Unset until resolved or when the catalog is
-   * unavailable — the meter then renders the raw token count.
+   * (`v2/model` list). Unset until resolved, when the catalog is
+   * unavailable, or after a model switch until the new model's limit is
+   * resolved — the meter then renders the raw token count.
    */
   maxTokens: number | undefined;
   /** Model key the resolved `maxTokens` belongs to; re-resolve on change. */
@@ -1765,7 +1766,10 @@ export function makeOpenCodeAdapter(
      * the runtime already relies on for inventory, so the response shape is
      * proven. Bounded by a short timeout because it runs on the event-pump
      * path: a wedged catalog request must leave `maxTokens` unresolved rather
-     * than stall assistant deltas, requests, and turn completions.
+     * than stall assistant deltas, requests, and turn completions. A model
+     * switch drops the previously resolved limit (and its model key) up
+     * front, so a failed lookup reports no capacity rather than the previous
+     * model's, and switching back to the old model re-resolves it.
      */
     const resolveOpenCodeMaxTokens = Effect.fn("resolveOpenCodeMaxTokens")(function* (
       context: OpenCodeSessionContext,
@@ -1779,6 +1783,12 @@ export function makeOpenCodeAdapter(
       if (context.maxTokensModelKey === modelKey) {
         return;
       }
+      // A model switch invalidates the previous resolution: the old limit is
+      // another model's capacity and must not leak into the next emitted
+      // snapshot. Dropping the model key too keeps the switch-back case
+      // honest — it re-resolves instead of early-returning on a stale key.
+      context.maxTokens = undefined;
+      context.maxTokensModelKey = undefined;
       const outcome = yield* runOpenCodeSdk("provider.list", () =>
         context.client.provider.list(),
       ).pipe(
@@ -1794,8 +1804,8 @@ export function makeOpenCodeAdapter(
             : undefined;
         }),
         // Event-pump path: never let an unresolved catalog request hold the
-        // pump hostage. The timeout surfaces as a failure, which leaves
-        // `maxTokensModelKey` unset so the next `session.updated` retries.
+        // pump hostage. The timeout surfaces as a failure, which leaves the
+        // model unresolved so the next `session.updated` retries.
         Effect.timeout("5 seconds"),
         Effect.exit,
       );
