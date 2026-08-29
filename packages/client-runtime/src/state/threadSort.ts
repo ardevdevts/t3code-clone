@@ -87,6 +87,24 @@ export function activeThreadAnchorTimestampMs(thread: {
   );
 }
 
+/**
+ * Active shelf timestamp in sidebar v2. `created_at` keeps the static
+ * anchor order (creation + unsettle bump). `updated_at` sorts by last
+ * user message (via getThreadSortTimestamp) but an un-settled thread
+ * still surfaces at the top — max(latestUserMessage, unsettledAt).
+ */
+export function getActiveThreadSortTimestamp(
+  thread: ThreadSortInput & { readonly unsettledAt?: string | null | undefined },
+  sortOrder: SidebarThreadSortOrder,
+): number {
+  if (sortOrder === "created_at") {
+    return activeThreadAnchorTimestampMs(thread);
+  }
+  const recency = getThreadSortTimestamp(thread, sortOrder);
+  const unsettled = toSortableTimestamp(thread.unsettledAt ?? undefined);
+  return unsettled === null ? recency : Math.max(recency, unsettled);
+}
+
 export function sortThreads<T extends { readonly id: string } & ThreadSortInput>(
   threads: readonly T[],
   sortOrder: SidebarThreadSortOrder,

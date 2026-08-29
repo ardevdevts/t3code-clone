@@ -14,9 +14,11 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import {
   activeThreadAnchorTimestampMs,
+  getActiveThreadSortTimestamp,
   sortPinnedThreadsByOrderKey,
 } from "@t3tools/client-runtime/state/thread-sort";
 import type { EnvironmentId, ProjectId, ThreadLinkedPullRequest } from "@t3tools/contracts";
+import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 
@@ -194,26 +196,39 @@ function firstValidTimestampMs(...candidates: ReadonlyArray<string | null | unde
 }
 
 /**
- * v2 sort: static order, newest anchor on top. Activity NEVER reorders the
- * list — a row holds its position between lifecycle transitions. The anchor
- * is creation time until an un-settle re-anchors it (see
- * activeThreadAnchorTimestampMs), so an un-settled thread surfaces at the
- * top instead of sinking back to its creation-order slot. Mirrors web's
- * sortThreadsForSidebar.
+ * v2 sort: newest first. `created_at` keeps the static anchor order
+ * (creation + unsettle bump). `updated_at` sorts by last user message
+ * recency but an un-settled thread still surfaces at the top. Mirrors
+ * web's sortThreadsForSidebar. Uses .sort() not .toSorted() — Hermes
+ * doesn't ship the ES2023 change-by-copy methods.
  */
 export function sortThreadsForListV2<
   T extends {
     readonly id: string;
     readonly createdAt: string;
+    readonly updatedAt?: string | undefined;
+    readonly latestUserMessageAt?: string | null | undefined;
+    readonly messages?: ReadonlyArray<{ readonly createdAt: string; readonly role: string }>;
     readonly unsettledAt?: string | null | undefined;
   },
->(threads: readonly T[]): T[] {
-  // .sort() on a copy, not .toSorted(): Hermes doesn't ship the ES2023
-  // change-by-copy array methods.
+>(threads: readonly T[], sortOrder: SidebarThreadSortOrder = "created_at"): T[] {
+  if (sortOrder === "created_at") {
+    return [...threads].sort(
+      (left, right) =>
+        activeThreadAnchorTimestampMs(right) - activeThreadAnchorTimestampMs(left) ||
+        left.id.localeCompare(right.id),
+    );
+  }
   return [...threads].sort(
     (left, right) =>
-      activeThreadAnchorTimestampMs(right) - activeThreadAnchorTimestampMs(left) ||
-      left.id.localeCompare(right.id),
+      getActiveThreadSortTimestamp(
+        right as Parameters<typeof getActiveThreadSortTimestamp>[0],
+        sortOrder,
+      ) -
+        getActiveThreadSortTimestamp(
+          left as Parameters<typeof getActiveThreadSortTimestamp>[0],
+          sortOrder,
+        ) || left.id.localeCompare(right.id),
   );
 }
 
@@ -386,6 +401,7 @@ export function buildThreadListV2Items(input: {
   /** The selected thread remains visible on an otherwise collapsed shelf so
       a split-view detail can never lose its navigation row. */
   readonly selectedThreadKey?: string | null;
+  readonly threadSortOrder?: import("@t3tools/contracts/settings").SidebarThreadSortOrder;
 }): ThreadListV2Layout {
   const now = input.now ?? new Date().toISOString();
   const snoozeNow = input.snoozeNow ?? now;
@@ -459,7 +475,7 @@ export function buildThreadListV2Items(input: {
     }
   }
 
-  const orderedActive = sortThreadsForListV2(active);
+  const orderedActive = sortThreadsForListV2(active, input.threadSortOrder ?? "created_at");
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
       parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),
