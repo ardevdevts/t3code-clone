@@ -8,6 +8,7 @@ import {
   RuntimeItemId,
   RuntimeRequestId,
   ThreadId,
+  type ThreadTokenUsageSnapshot,
   type ToolLifecycleItemType,
   TurnId,
   type UserInputQuestion,
@@ -84,6 +85,102 @@ function parseOpenCodeResume(raw: unknown): { readonly sessionId: string } | und
     return undefined;
   }
   return { sessionId: record.sessionId.trim() };
+}
+
+/**
+ * Normalized, clamped token counts shared by the two OpenCode usage sources:
+ * per-message counts on assistant `message.updated` events and cumulative
+ * per-session counts on `session.updated` events (both carry the same
+ * non-overlapping shape: `input` excludes cache, `reasoning` is split out of
+ * `output`).
+ */
+export interface OpenCodeTokenCounts {
+  readonly input: number;
+  readonly output: number;
+  readonly reasoning: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+}
+
+export function normalizeOpenCodeTokenCounts(tokens: {
+  readonly input?: number | undefined;
+  readonly output?: number | undefined;
+  readonly reasoning?: number | undefined;
+  readonly cache?: { readonly read?: number | undefined; readonly write?: number | undefined } | undefined;
+}): OpenCodeTokenCounts {
+  // Guard against partial payloads: a missing or non-finite count clamps to
+  // zero instead of leaking NaN into the usage snapshot (mirrors OpenCode's
+  // own `safe()` in session.ts getUsage).
+  const clamp = (value: number | undefined) => {
+    const n = typeof value === "number" && Number.isFinite(value) ? value : 0;
+    return Math.max(0, Math.round(n));
+  };
+  return {
+    input: clamp(tokens.input),
+    output: clamp(tokens.output),
+    reasoning: clamp(tokens.reasoning),
+    cacheRead: clamp(tokens.cache?.read),
+    cacheWrite: clamp(tokens.cache?.write),
+  };
+}
+
+/**
+ * Build the token-usage snapshot the context-window meter renders. OpenCode
+ * reports non-overlapping counts (input excludes cache), so the
+ * context-window equivalent of its own `contextTokens` helper is
+ * `input + cache.read + cache.write` on the latest assistant message; the
+ * cumulative session totals (which keep growing across compactions) become
+ * `totalProcessedTokens`, and the cumulative session cost (USD) is surfaced
+ * as-is. Returns undefined until an assistant message reports usage — a
+ * session with nothing processed has no meter.
+ */
+export function normalizeOpenCodeTokenUsage(input: {
+  readonly messageTokens?: OpenCodeTokenCounts | undefined;
+  readonly cumulativeTokens?: OpenCodeTokenCounts | undefined;
+  readonly maxTokens?: number | undefined;
+  readonly cumulativeSessionCost?: number | undefined;
+}): ThreadTokenUsageSnapshot | undefined {
+  const { messageTokens, cumulativeTokens, maxTokens, cumulativeSessionCost } = input;
+  if (!messageTokens) {
+    return undefined;
+  }
+
+  const usedTokens = messageTokens.input + messageTokens.cacheRead + messageTokens.cacheWrite;
+  if (usedTokens <= 0) {
+    return undefined;
+  }
+
+  const inputTokens = usedTokens;
+  const cachedInputTokens = messageTokens.cacheRead + messageTokens.cacheWrite;
+  const outputTokens = messageTokens.output;
+  const reasoningOutputTokens = messageTokens.reasoning;
+  const totalProcessedTokens = cumulativeTokens
+    ? cumulativeTokens.input +
+      cumulativeTokens.output +
+      cumulativeTokens.reasoning +
+      cumulativeTokens.cacheRead +
+      cumulativeTokens.cacheWrite
+    : undefined;
+
+  return {
+    usedTokens,
+    ...(totalProcessedTokens !== undefined && totalProcessedTokens > usedTokens
+      ? { totalProcessedTokens }
+      : {}),
+    ...(maxTokens !== undefined && maxTokens > 0 ? { maxTokens } : {}),
+    ...(cumulativeSessionCost !== undefined && cumulativeSessionCost > 0
+      ? { cost: cumulativeSessionCost }
+      : {}),
+    inputTokens,
+    cachedInputTokens,
+    ...(outputTokens > 0 ? { outputTokens } : {}),
+    ...(reasoningOutputTokens > 0 ? { reasoningOutputTokens } : {}),
+    lastUsedTokens: usedTokens,
+    lastInputTokens: inputTokens,
+    lastCachedInputTokens: cachedInputTokens,
+    ...(outputTokens > 0 ? { lastOutputTokens: outputTokens } : {}),
+    ...(reasoningOutputTokens > 0 ? { lastReasoningOutputTokens: reasoningOutputTokens } : {}),
+  };
 }
 
 /**
@@ -335,6 +432,33 @@ interface OpenCodeSessionContext {
   readonly emittedTextByPartId: Map<string, string>;
   readonly completedAssistantPartIds: Set<string>;
   readonly turns: Array<OpenCodeTurnSnapshot>;
+  /**
+   * Token counts from the latest assistant `message.updated`. The current
+   * context-window usage derives from this (matches OpenCode's own
+   * `contextTokens` definition for the latest assistant message).
+   */
+  lastMessageTokenCounts: OpenCodeTokenCounts | undefined;
+  /**
+   * Cumulative session token counts from `session.updated`. Folded into the
+   * usage snapshot as `totalProcessedTokens`, which keeps growing across
+   * compactions.
+   */
+  cumulativeTokenCounts: OpenCodeTokenCounts | undefined;
+  /**
+   * Cumulative session cost in USD from `session.updated`, surfaced on the
+   * context-window meter next to the token counts.
+   */
+  cumulativeSessionCost: number | undefined;
+  /**
+   * Context-window size resolved once per model from the catalog
+   * (`v2/model` list). Unset until resolved or when the catalog is
+   * unavailable — the meter then renders the raw token count.
+   */
+  maxTokens: number | undefined;
+  /** Model key the resolved `maxTokens` belongs to; re-resolve on change. */
+  maxTokensModelKey: string | undefined;
+  /** Dedupe key of the last emitted `thread.token-usage.updated`. */
+  lastEmittedTokenUsageKey: string | undefined;
   activeTurnId: TurnId | undefined;
   activeAgent: string | undefined;
   activeVariant: string | undefined;
@@ -1476,6 +1600,107 @@ export function makeOpenCodeAdapter(
       }
     });
 
+    /**
+     * Resolve the session model's context-window size from the provider
+     * catalog once per model, best-effort: an unknown model leaves `maxTokens`
+     * unset and the meter renders the raw token count. A failed catalog call
+     * does not count as resolved, so a transient failure retries on the next
+     * `session.updated`. Uses the same v1 `provider.list` endpoint the runtime
+     * already relies on for inventory, so the response shape is proven.
+     */
+    const resolveOpenCodeMaxTokens = Effect.fn("resolveOpenCodeMaxTokens")(function* (
+      context: OpenCodeSessionContext,
+      providerID: string | undefined,
+      modelID: string | undefined,
+    ) {
+      if (!providerID || !modelID) {
+        return;
+      }
+      const modelKey = `${providerID}/${modelID}`;
+      if (context.maxTokensModelKey === modelKey) {
+        return;
+      }
+      const outcome = yield* runOpenCodeSdk("provider.list", () =>
+        context.client.provider.list(),
+      ).pipe(
+        Effect.map((response) => {
+          const providers = response.data?.all;
+          if (!Array.isArray(providers)) {
+            return undefined;
+          }
+          const provider = providers.find((entry) => entry.id === providerID);
+          const limit = provider?.models?.[modelID]?.limit?.context;
+          return typeof limit === "number" && Number.isFinite(limit) && limit > 0
+            ? Math.round(limit)
+            : undefined;
+        }),
+        Effect.exit,
+      );
+      if (Exit.isSuccess(outcome)) {
+        context.maxTokensModelKey = modelKey;
+        context.maxTokens = outcome.value;
+      }
+    });
+
+    /**
+     * Emit `thread.token-usage.updated` from the latest per-message and
+     * cumulative session token counts. Deduped so unchanged `session.updated`
+     * replays don't spam the event log; the key covers every input that
+     * shapes the snapshot (per-message and cumulative counts, resolved
+     * maxTokens, session cost), so any change to the rendered snapshot
+     * re-emits. The context-window meter reads the newest activity, so a
+     * re-emission after `maxTokens` resolves simply refreshes the snapshot.
+     */
+    const emitOpenCodeTokenUsage = Effect.fn("emitOpenCodeTokenUsage")(function* (
+      context: OpenCodeSessionContext,
+      options?: { readonly turnId?: TurnId | undefined; readonly raw?: unknown },
+    ) {
+      const messageTokens = context.lastMessageTokenCounts;
+      if (!messageTokens) {
+        return;
+      }
+      const usage = normalizeOpenCodeTokenUsage({
+        messageTokens,
+        cumulativeTokens: context.cumulativeTokenCounts,
+        maxTokens: context.maxTokens,
+        cumulativeSessionCost: context.cumulativeSessionCost,
+      });
+      if (!usage) {
+        return;
+      }
+      const cumulative = context.cumulativeTokenCounts;
+      // Key over every input that shapes the snapshot. -1 marks an absent
+      // value, so "not reported" and a literal zero are distinct (a session
+      // whose cost report goes away must re-emit rather than be suppressed).
+      const dedupeKey = [
+        messageTokens.input,
+        messageTokens.output,
+        messageTokens.reasoning,
+        messageTokens.cacheRead,
+        messageTokens.cacheWrite,
+        cumulative?.input ?? -1,
+        cumulative?.output ?? -1,
+        cumulative?.reasoning ?? -1,
+        cumulative?.cacheRead ?? -1,
+        cumulative?.cacheWrite ?? -1,
+        context.maxTokens ?? -1,
+        context.cumulativeSessionCost ?? -1,
+      ].join(",");
+      if (dedupeKey === context.lastEmittedTokenUsageKey) {
+        return;
+      }
+      context.lastEmittedTokenUsageKey = dedupeKey;
+      yield* emit({
+        ...(yield* buildEventBase({
+          threadId: context.session.threadId,
+          ...(options?.turnId ? { turnId: options.turnId } : {}),
+          ...(options?.raw !== undefined ? { raw: options.raw } : {}),
+        })),
+        type: "thread.token-usage.updated",
+        payload: { usage },
+      });
+    });
+
     const isRelatedOpenCodeSession = Effect.fn("isRelatedOpenCodeSession")(function* (
       context: OpenCodeSessionContext,
       candidateSessionId: string,
@@ -1912,6 +2137,7 @@ export function makeOpenCodeAdapter(
 
       switch (event.type) {
         case "session.updated": {
+          const info = event.properties.info;
           const title = openCodeEventSessionTitle(event);
           if (title) {
             yield* emit({
@@ -1928,15 +2154,21 @@ export function makeOpenCodeAdapter(
               },
             });
           }
+          if (info.tokens) {
+            context.cumulativeTokenCounts = normalizeOpenCodeTokenCounts(info.tokens);
+          }
+          if (typeof info.cost === "number" && Number.isFinite(info.cost)) {
+            context.cumulativeSessionCost = info.cost;
+          }
+          yield* resolveOpenCodeMaxTokens(context, info.model?.providerID, info.model?.id);
+          yield* emitOpenCodeTokenUsage(context, { raw: event });
           break;
         }
 
         case "message.updated": {
+          const info = event.properties.info;
           const promptAdmission = context.promptAdmission;
-          if (
-            event.properties.info.role === "user" &&
-            promptAdmission?.messageId === event.properties.info.id
-          ) {
+          if (info.role === "user" && promptAdmission?.messageId === info.id) {
             promptAdmission.messageObserved = true;
             if (promptAdmission.accepted) {
               const idle = promptAdmission.idleDuringAdmission;
@@ -1950,10 +2182,20 @@ export function makeOpenCodeAdapter(
               }
             }
           }
-          context.messageRoleById.set(event.properties.info.id, event.properties.info.role);
-          if (event.properties.info.role === "assistant") {
+          context.messageRoleById.set(info.id, info.role);
+          if (info.role === "assistant") {
+            if (info.tokens) {
+              const counts = normalizeOpenCodeTokenCounts(info.tokens);
+              // Zero-token updates (e.g. compaction summary messages) must
+              // not clobber the meter's per-message usage with nothing; keep
+              // the last assistant message that actually reported usage.
+              if (counts.input + counts.cacheRead + counts.cacheWrite > 0) {
+                context.lastMessageTokenCounts = counts;
+                yield* emitOpenCodeTokenUsage(context, { turnId, raw: event });
+              }
+            }
             for (const part of context.partById.values()) {
-              if (part.messageID !== event.properties.info.id) {
+              if (part.messageID !== info.id) {
                 continue;
               }
               yield* emitAssistantTextDelta(context, part, turnId, event);
@@ -2471,6 +2713,12 @@ export function makeOpenCodeAdapter(
           messageRoleById: new Map(),
           completedAssistantPartIds: new Set(),
           turns: [],
+          lastMessageTokenCounts: undefined,
+          cumulativeTokenCounts: undefined,
+          cumulativeSessionCost: undefined,
+          maxTokens: undefined,
+          maxTokensModelKey: undefined,
+          lastEmittedTokenUsageKey: undefined,
           activeTurnId: undefined,
           activeAgent: undefined,
           activeVariant: undefined,
