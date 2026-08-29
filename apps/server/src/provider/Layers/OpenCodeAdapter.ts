@@ -1603,10 +1603,13 @@ export function makeOpenCodeAdapter(
     /**
      * Resolve the session model's context-window size from the provider
      * catalog once per model, best-effort: an unknown model leaves `maxTokens`
-     * unset and the meter renders the raw token count. A failed catalog call
-     * does not count as resolved, so a transient failure retries on the next
-     * `session.updated`. Uses the same v1 `provider.list` endpoint the runtime
-     * already relies on for inventory, so the response shape is proven.
+     * unset and the meter renders the raw token count. A failed or timed-out
+     * catalog call does not count as resolved, so a transient failure retries
+     * on the next `session.updated`. Uses the same v1 `provider.list` endpoint
+     * the runtime already relies on for inventory, so the response shape is
+     * proven. Bounded by a short timeout because it runs on the event-pump
+     * path: a wedged catalog request must leave `maxTokens` unresolved rather
+     * than stall assistant deltas, requests, and turn completions.
      */
     const resolveOpenCodeMaxTokens = Effect.fn("resolveOpenCodeMaxTokens")(function* (
       context: OpenCodeSessionContext,
@@ -1634,6 +1637,10 @@ export function makeOpenCodeAdapter(
             ? Math.round(limit)
             : undefined;
         }),
+        // Event-pump path: never let an unresolved catalog request hold the
+        // pump hostage. The timeout surfaces as a failure, which leaves
+        // `maxTokensModelKey` unset so the next `session.updated` retries.
+        Effect.timeout("5 seconds"),
         Effect.exit,
       );
       if (Exit.isSuccess(outcome)) {
