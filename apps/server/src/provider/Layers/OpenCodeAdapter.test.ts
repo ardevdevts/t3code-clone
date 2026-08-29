@@ -5539,6 +5539,145 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  it.effect(
+    "drops the previous model's maxTokens when a switch fails to resolve, and re-resolves on switch-back",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-opencode-usage-model-switch-failure");
+        runtimeMock.state.modelListResults = [
+          {
+            id: "anthropic",
+            models: {
+              "claude-sonnet-4-5": { limit: { context: 200_000 } },
+            },
+          },
+        ];
+        const switchedSessionUpdate = promiseWithResolvers<unknown>();
+        const switchBackSessionUpdate = promiseWithResolvers<unknown>();
+        runtimeMock.state.subscribedEvents = [
+          {
+            type: "message.updated",
+            properties: {
+              sessionID: "http://127.0.0.1:9999/session",
+              info: {
+                id: "msg-usage-switch-failure",
+                role: "assistant",
+                modelID: "claude-sonnet-4-5",
+                providerID: "anthropic",
+                tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
+              },
+            },
+          },
+          {
+            type: "session.updated",
+            properties: {
+              sessionID: "http://127.0.0.1:9999/session",
+              info: {
+                id: "http://127.0.0.1:9999/session",
+                model: { id: "claude-sonnet-4-5", providerID: "anthropic" },
+                tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
+              },
+            },
+          },
+          switchedSessionUpdate.promise,
+          switchBackSessionUpdate.promise,
+        ];
+
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter(
+            (event) => event.threadId === threadId && event.type === "thread.token-usage.updated",
+          ),
+          Stream.take(2),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId,
+          runtimeMode: "full-access",
+        });
+
+        const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+        NodeAssert.equal(events.length, 2);
+        const resolved = events[1];
+        NodeAssert.equal(resolved?.type, "thread.token-usage.updated");
+        if (resolved?.type !== "thread.token-usage.updated") {
+          return;
+        }
+        NodeAssert.equal(resolved.payload.usage.maxTokens, 200_000);
+
+        // Switch to model B while the catalog is down: the emitted snapshot
+        // must drop model A's capacity rather than keep reporting it.
+        runtimeMock.state.modelListError = new Error("catalog offline");
+        const failureEventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter(
+            (event) => event.threadId === threadId && event.type === "thread.token-usage.updated",
+          ),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        switchedSessionUpdate.resolve({
+          type: "session.updated",
+          properties: {
+            sessionID: "http://127.0.0.1:9999/session",
+            info: {
+              id: "http://127.0.0.1:9999/session",
+              model: { id: "gpt-5", providerID: "openai" },
+              tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
+            },
+          },
+        });
+
+        const failureEvents = Array.from(
+          yield* Fiber.join(failureEventsFiber).pipe(Effect.timeout("1 second")),
+        );
+        const failed = failureEvents[0];
+        NodeAssert.equal(failed?.type, "thread.token-usage.updated");
+        if (failed?.type !== "thread.token-usage.updated") {
+          return;
+        }
+        NodeAssert.equal("maxTokens" in failed.payload.usage, false);
+        NodeAssert.equal(runtimeMock.state.modelListCalls, 2);
+
+        // Switching back to model A must re-resolve instead of trusting the
+        // stale model key from the failed switch.
+        runtimeMock.state.modelListError = null;
+        const switchBackEventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter(
+            (event) => event.threadId === threadId && event.type === "thread.token-usage.updated",
+          ),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        switchBackSessionUpdate.resolve({
+          type: "session.updated",
+          properties: {
+            sessionID: "http://127.0.0.1:9999/session",
+            info: {
+              id: "http://127.0.0.1:9999/session",
+              model: { id: "claude-sonnet-4-5", providerID: "anthropic" },
+              tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
+            },
+          },
+        });
+
+        const switchBackEvents = Array.from(
+          yield* Fiber.join(switchBackEventsFiber).pipe(Effect.timeout("1 second")),
+        );
+        const switchBack = switchBackEvents[0];
+        NodeAssert.equal(switchBack?.type, "thread.token-usage.updated");
+        if (switchBack?.type !== "thread.token-usage.updated") {
+          return;
+        }
+        NodeAssert.equal(switchBack.payload.usage.maxTokens, 200_000);
+        NodeAssert.equal(runtimeMock.state.modelListCalls, 3);
+      }),
+  );
+
   it.effect("writes provider-native observability records using the session thread id", () =>
     Effect.gen(function* () {
       const nativeEvents: Array<{
