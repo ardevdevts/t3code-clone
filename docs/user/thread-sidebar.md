@@ -10,6 +10,11 @@ request merges if **Auto-settle merged threads** is enabled.
 When you un-settle a thread, it returns to the top of the active list so you can find it right
 away. Its timestamps do not change. Other threads keep their positions.
 
+Use the sort button at the top of the sidebar to change how the active list is ordered.
+**Creation order** keeps the list static and newest at the top. **Last user message** moves a
+thread to the top when you send a new message. An un-settled thread still appears at the top
+in either mode.
+
 Right-click a pull request link in a thread and choose **Link to thread** to show that pull request
 in the sidebar. The thread settles when the linked pull request merges if **Auto-settle merged
 threads** is enabled. Right-click the same link and choose **Unlink from thread** to remove it.

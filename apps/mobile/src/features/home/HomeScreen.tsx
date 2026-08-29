@@ -689,11 +689,13 @@ export function HomeScreen(props: HomeScreenProps) {
       snoozedShelfExpanded,
       settledShelfExpanded,
       selectedThreadKey: null,
+      threadSortOrder: props.threadSortOrder,
     });
   }, [
     changeRequestByKey,
     autoSettleOnMerge,
     nowMinute,
+    props.threadSortOrder,
     snoozeWakeTick,
     snoozedShelfExpanded,
     settledShelfExpanded,

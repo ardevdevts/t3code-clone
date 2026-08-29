@@ -31,10 +31,11 @@ import {
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
-import type { TimestampFormat } from "@t3tools/contracts/settings";
+import type { SidebarThreadSortOrder, TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
+  ArrowUpDownIcon,
   CheckIcon,
   ChevronDownIcon,
   CircleAlertIcon,
@@ -102,7 +103,7 @@ import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
-import { useClientSettings } from "../hooks/useSettings";
+import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
@@ -178,7 +179,7 @@ import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import { Menu, MenuGroup, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -198,6 +199,11 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 // Keep the v2 key so existing preferences survive the v2-to-default rename.
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:snoozed-expanded";
+
+const SIDEBAR_V2_THREAD_SORT_LABELS: Record<SidebarThreadSortOrder, string> = {
+  updated_at: "Last user message",
+  created_at: "Creation order",
+};
 
 function compactSidebarTimeLabel(label: string): string {
   if (label === "just now") return "now";
@@ -1733,6 +1739,8 @@ export default function Sidebar() {
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
+  const sidebarThreadSortOrder = useClientSettings((s) => s.sidebarThreadSortOrder);
+  const updateClientSettings = useUpdateClientSettings();
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
@@ -2097,7 +2105,7 @@ export default function Sidebar() {
           )
           .map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
       ),
-      activeThreads: sortThreadsForSidebar(active),
+      activeThreads: sortThreadsForSidebar(active, sidebarThreadSortOrder),
       // Soonest wake first: "what comes back next" is the shelf's question.
       snoozedThreads: snoozed.toSorted(
         (left, right) =>
@@ -2114,6 +2122,7 @@ export default function Sidebar() {
     nowMinute,
     scopedProjectKeys,
     serverConfigs,
+    sidebarThreadSortOrder,
     snoozeWakeTick,
     threads,
   ]);
@@ -3458,7 +3467,44 @@ export default function Sidebar() {
                   </Button>
                 ) : null}
               </div>
-              <div className="shrink-0">
+              <div className="flex shrink-0 items-center gap-1">
+                <Menu>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <MenuTrigger className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-icon-muted hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring" />
+                      }
+                    >
+                      <ArrowUpDownIcon className="size-3.5" />
+                    </TooltipTrigger>
+                    <TooltipPopup side="right">Sort threads</TooltipPopup>
+                  </Tooltip>
+                  <MenuPopup align="end" side="bottom" className="min-w-52">
+                    <MenuGroup>
+                      <div className="px-2 py-1 text-xs font-medium text-muted-foreground">
+                        Sort active threads
+                      </div>
+                      <MenuRadioGroup
+                        value={sidebarThreadSortOrder}
+                        onValueChange={(value) => {
+                          updateClientSettings({
+                            sidebarThreadSortOrder: value as SidebarThreadSortOrder,
+                          });
+                        }}
+                      >
+                        {(
+                          Object.entries(SIDEBAR_V2_THREAD_SORT_LABELS) as Array<
+                            [SidebarThreadSortOrder, string]
+                          >
+                        ).map(([value, label]) => (
+                          <MenuRadioItem key={value} value={value} className="min-h-7 py-1 text-xs">
+                            {label}
+                          </MenuRadioItem>
+                        ))}
+                      </MenuRadioGroup>
+                    </MenuGroup>
+                  </MenuPopup>
+                </Menu>
                 <Tooltip>
                   <TooltipTrigger
                     render={

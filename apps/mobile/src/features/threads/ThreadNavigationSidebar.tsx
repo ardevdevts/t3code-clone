@@ -528,11 +528,13 @@ function ThreadNavigationSidebarPane(
       snoozedShelfExpanded,
       settledShelfExpanded,
       selectedThreadKey: props.selectedThreadKey ?? null,
+      threadSortOrder: options.threadSortOrder,
     });
   }, [
     changeRequestByKey,
     autoSettleOnMerge,
     nowMinute,
+    options.threadSortOrder,
     snoozeWakeTick,
     snoozedShelfExpanded,
     settledShelfExpanded,
