@@ -4929,61 +4929,88 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  // ---- Context-window usage fixtures --------------------------------------
+  //
+  // The usage integration tests all drive the same two OpenCode events with
+  // small variations, then collect `thread.token-usage.updated` emissions.
+  // These helpers keep each scenario down to its actual variations.
+
+  const usageSessionId = "http://127.0.0.1:9999/session";
+  const usageModel = { id: "claude-sonnet-4-5", providerID: "anthropic" };
+  const usageTokens = { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } };
+  const usageCatalog = [
+    { id: "anthropic", models: { "claude-sonnet-4-5": { limit: { context: 200_000 } } } },
+  ];
+
+  const usageAssistantMessage = (id: string, tokens = usageTokens) => ({
+    type: "message.updated",
+    properties: {
+      sessionID: usageSessionId,
+      info: {
+        id,
+        role: "assistant",
+        modelID: usageModel.id,
+        providerID: usageModel.providerID,
+        tokens,
+      },
+    },
+  });
+
+  const usageSessionUpdate = ({
+    model = usageModel,
+    tokens = usageTokens,
+    ...rest
+  }: {
+    readonly model?: Record<string, unknown> | undefined;
+    readonly tokens?: Record<string, unknown> | undefined;
+  } & Record<string, unknown> = {}) => ({
+    type: "session.updated",
+    properties: {
+      sessionID: usageSessionId,
+      info: { id: usageSessionId, model, tokens, ...rest },
+    },
+  });
+
+  // Session update carrying only a title — used as a drain marker whose
+  // metadata event proves earlier events finished processing.
+  const usageMarkerSessionUpdate = (title: string) => ({
+    type: "session.updated",
+    properties: {
+      sessionID: usageSessionId,
+      info: { id: usageSessionId, title },
+    },
+  });
+
+  const startUsageSession = (adapter: OpenCodeAdapterShape, threadId: ThreadId) =>
+    adapter.startSession({
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      runtimeMode: "full-access",
+    });
+
+  const collectUsageEvents = (adapter: OpenCodeAdapterShape, threadId: ThreadId, take: number) =>
+    adapter.streamEvents.pipe(
+      Stream.filter(
+        (event) => event.threadId === threadId && event.type === "thread.token-usage.updated",
+      ),
+      Stream.take(take),
+      Stream.runCollect,
+      Effect.forkChild,
+    );
+
   it.effect("emits context-window usage from assistant messages and session totals", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
       const threadId = asThreadId("thread-opencode-usage");
-      runtimeMock.state.modelListResults = [
-        {
-          id: "anthropic",
-          models: {
-            "claude-sonnet-4-5": { limit: { context: 200_000 } },
-          },
-        },
-      ];
+      runtimeMock.state.modelListResults = usageCatalog;
       runtimeMock.state.subscribedEvents = [
-        {
-          type: "session.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "http://127.0.0.1:9999/session",
-              title: "Usage thread",
-              model: { id: "claude-sonnet-4-5", providerID: "anthropic" },
-              tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-              cost: 0.42,
-            },
-          },
-        },
-        {
-          type: "message.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "msg-usage-1",
-              role: "assistant",
-              modelID: "claude-sonnet-4-5",
-              providerID: "anthropic",
-              tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-            },
-          },
-        },
+        usageSessionUpdate({ cost: 0.42 }),
+        usageAssistantMessage("msg-usage-1"),
       ];
 
-      const eventsFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter(
-          (event) => event.threadId === threadId && event.type === "thread.token-usage.updated",
-        ),
-        Stream.take(1),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
+      const eventsFiber = yield* collectUsageEvents(adapter, threadId, 1);
 
-      yield* adapter.startSession({
-        provider: ProviderDriverKind.make("opencode"),
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startUsageSession(adapter, threadId);
 
       const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
       const usageEvent = events[0];
@@ -5019,41 +5046,13 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
       const threadId = asThreadId("thread-opencode-usage-dedupe");
-      const assistantMessage = {
-        id: "msg-usage-dedupe",
-        role: "assistant",
-        modelID: "claude-sonnet-4-5",
-        providerID: "anthropic",
-        tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-      };
       runtimeMock.state.subscribedEvents = [
-        {
-          type: "message.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: assistantMessage,
-          },
-        },
-        {
-          type: "message.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: { ...assistantMessage, id: "msg-usage-dedupe-2" },
-          },
-        },
+        usageAssistantMessage("msg-usage-dedupe"),
+        usageAssistantMessage("msg-usage-dedupe-2"),
         // Drain marker: its metadata event is emitted only after both
         // messages have been fully processed, so the collected window is
         // complete regardless of how many ambient events they produce.
-        {
-          type: "session.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "http://127.0.0.1:9999/session",
-              title: "dedupe-marker",
-            },
-          },
-        },
+        usageMarkerSessionUpdate("dedupe-marker"),
       ];
 
       const eventsFiber = yield* adapter.streamEvents.pipe(
@@ -5083,48 +5082,18 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       const adapter = yield* OpenCodeAdapter;
       const threadId = asThreadId("thread-opencode-usage-output-growth");
       runtimeMock.state.subscribedEvents = [
-        {
-          type: "message.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "msg-output-growth-1",
-              role: "assistant",
-              modelID: "claude-sonnet-4-5",
-              providerID: "anthropic",
-              tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-            },
-          },
-        },
-        {
-          type: "message.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "msg-output-growth-2",
-              role: "assistant",
-              modelID: "claude-sonnet-4-5",
-              providerID: "anthropic",
-              tokens: { input: 50, output: 90, reasoning: 30, cache: { read: 20, write: 0 } },
-            },
-          },
-        },
+        usageAssistantMessage("msg-output-growth-1"),
+        usageAssistantMessage("msg-output-growth-2", {
+          input: 50,
+          output: 90,
+          reasoning: 30,
+          cache: { read: 20, write: 0 },
+        }),
       ];
 
-      const eventsFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter(
-          (event) => event.threadId === threadId && event.type === "thread.token-usage.updated",
-        ),
-        Stream.take(2),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
+      const eventsFiber = yield* collectUsageEvents(adapter, threadId, 2);
 
-      yield* adapter.startSession({
-        provider: ProviderDriverKind.make("opencode"),
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startUsageSession(adapter, threadId);
 
       const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
       NodeAssert.equal(events.length, 2);
@@ -5141,106 +5110,60 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
-  it.effect("retries maxTokens resolution after a transient catalog failure", () =>
-    Effect.gen(function* () {
-      const adapter = yield* OpenCodeAdapter;
-      const threadId = asThreadId("thread-opencode-usage-catalog-retry");
-      runtimeMock.state.modelListError = new Error("catalog offline");
-      const secondSessionUpdate = promiseWithResolvers<unknown>();
-      runtimeMock.state.subscribedEvents = [
-        {
-          type: "session.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "http://127.0.0.1:9999/session",
-              model: { id: "claude-sonnet-4-5", providerID: "anthropic" },
-              tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-            },
-          },
-        },
-        {
-          type: "message.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "msg-usage-catalog-retry",
-              role: "assistant",
-              modelID: "claude-sonnet-4-5",
-              providerID: "anthropic",
-              tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-            },
-          },
-        },
-        secondSessionUpdate.promise,
-      ];
+  it.effect(
+    "emits usage without maxTokens while the catalog is unavailable, then retries once it resolves",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-opencode-usage-catalog-retry");
+        runtimeMock.state.modelListError = new Error("catalog offline");
+        const recoveredSessionUpdate = promiseWithResolvers<unknown>();
+        runtimeMock.state.subscribedEvents = [
+          usageAssistantMessage("msg-usage-catalog-retry"),
+          usageSessionUpdate(),
+          recoveredSessionUpdate.promise,
+        ];
 
-      const eventsFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter(
-          (event) => event.threadId === threadId && event.type === "thread.token-usage.updated",
-        ),
-        Stream.take(1),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
+        const eventsFiber = yield* collectUsageEvents(adapter, threadId, 1);
 
-      yield* adapter.startSession({
-        provider: ProviderDriverKind.make("opencode"),
-        threadId,
-        runtimeMode: "full-access",
-      });
+        yield* startUsageSession(adapter, threadId);
 
-      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
-      const first = events[0];
-      NodeAssert.equal(first?.type, "thread.token-usage.updated");
-      if (first?.type !== "thread.token-usage.updated") {
-        return;
-      }
-      NodeAssert.equal("maxTokens" in first.payload.usage, false);
-      NodeAssert.equal(runtimeMock.state.modelListCalls, 1);
+        const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+        const first = events[0];
+        NodeAssert.equal(first?.type, "thread.token-usage.updated");
+        if (first?.type !== "thread.token-usage.updated") {
+          return;
+        }
+        // The meter still renders the raw token count while the catalog is
+        // down. (The message-before-session ordering that delays the first
+        // resolution with a healthy catalog is covered by the model-switch
+        // test below.)
+        NodeAssert.equal("maxTokens" in first.payload.usage, false);
+        NodeAssert.equal(first.payload.usage.usedTokens, 70);
+        NodeAssert.equal(runtimeMock.state.modelListCalls, 1);
 
-      // The catalog comes back: a later session.updated must retry the
-      // resolution instead of giving up for the session's lifetime.
-      runtimeMock.state.modelListError = null;
-      runtimeMock.state.modelListResults = [
-        {
-          id: "anthropic",
-          models: {
-            "claude-sonnet-4-5": { limit: { context: 200_000 } },
-          },
-        },
-      ];
-      const secondEventsFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter(
-          (event) => event.threadId === threadId && event.type === "thread.token-usage.updated",
-        ),
-        Stream.take(1),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
-      secondSessionUpdate.resolve({
-        type: "session.updated",
-        properties: {
-          sessionID: "http://127.0.0.1:9999/session",
-          info: {
-            id: "http://127.0.0.1:9999/session",
-            model: { id: "claude-sonnet-4-5", providerID: "anthropic" },
+        // The catalog comes back: a later session.updated must retry the
+        // resolution instead of giving up for the session's lifetime.
+        runtimeMock.state.modelListError = null;
+        runtimeMock.state.modelListResults = usageCatalog;
+        const secondEventsFiber = yield* collectUsageEvents(adapter, threadId, 1);
+        recoveredSessionUpdate.resolve(
+          usageSessionUpdate({
             tokens: { input: 60, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-          },
-        },
-      });
+          }),
+        );
 
-      const secondEvents = Array.from(
-        yield* Fiber.join(secondEventsFiber).pipe(Effect.timeout("1 second")),
-      );
-      const second = secondEvents[0];
-      NodeAssert.equal(second?.type, "thread.token-usage.updated");
-      if (second?.type !== "thread.token-usage.updated") {
-        return;
-      }
-      NodeAssert.equal(second.payload.usage.maxTokens, 200_000);
-      NodeAssert.equal(runtimeMock.state.modelListCalls, 2);
-    }),
+        const secondEvents = Array.from(
+          yield* Fiber.join(secondEventsFiber).pipe(Effect.timeout("1 second")),
+        );
+        const second = secondEvents[0];
+        NodeAssert.equal(second?.type, "thread.token-usage.updated");
+        if (second?.type !== "thread.token-usage.updated") {
+          return;
+        }
+        NodeAssert.equal(second.payload.usage.maxTokens, 200_000);
+        NodeAssert.equal(runtimeMock.state.modelListCalls, 2);
+      }),
   );
 
   it.effect("keeps per-message usage when a zero-token message arrives", () =>
@@ -5248,53 +5171,17 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       const adapter = yield* OpenCodeAdapter;
       const threadId = asThreadId("thread-opencode-usage-zero-token");
       runtimeMock.state.subscribedEvents = [
-        {
-          type: "message.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "msg-usage-real",
-              role: "assistant",
-              modelID: "claude-sonnet-4-5",
-              providerID: "anthropic",
-              tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-            },
-          },
-        },
-        {
-          type: "message.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "msg-usage-zero",
-              role: "assistant",
-              modelID: "claude-sonnet-4-5",
-              providerID: "anthropic",
-              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-            },
-          },
-        },
-        {
-          type: "session.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "http://127.0.0.1:9999/session",
-              model: { id: "claude-sonnet-4-5", providerID: "anthropic" },
-              tokens: { input: 60, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-            },
-          },
-        },
-        {
-          type: "session.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "http://127.0.0.1:9999/session",
-              title: "zero-token-marker",
-            },
-          },
-        },
+        usageAssistantMessage("msg-usage-real"),
+        usageAssistantMessage("msg-usage-zero", {
+          input: 0,
+          output: 0,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        }),
+        usageSessionUpdate({
+          tokens: { input: 60, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
+        }),
+        usageMarkerSessionUpdate("zero-token-marker"),
       ];
 
       const eventsFiber = yield* adapter.streamEvents.pipe(
@@ -5327,204 +5214,23 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
-  it.effect("emits usage without maxTokens when the model catalog is unavailable", () =>
-    Effect.gen(function* () {
-      const adapter = yield* OpenCodeAdapter;
-      const threadId = asThreadId("thread-opencode-usage-no-catalog");
-      runtimeMock.state.modelListError = new Error("catalog offline");
-      runtimeMock.state.subscribedEvents = [
-        {
-          type: "session.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "http://127.0.0.1:9999/session",
-              model: { id: "claude-sonnet-4-5", providerID: "anthropic" },
-              tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-            },
-          },
-        },
-        {
-          type: "message.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "msg-usage-no-catalog",
-              role: "assistant",
-              modelID: "claude-sonnet-4-5",
-              providerID: "anthropic",
-              tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-            },
-          },
-        },
-      ];
-
-      const eventsFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter(
-          (event) => event.threadId === threadId && event.type === "thread.token-usage.updated",
-        ),
-        Stream.take(1),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
-
-      yield* adapter.startSession({
-        provider: ProviderDriverKind.make("opencode"),
-        threadId,
-        runtimeMode: "full-access",
-      });
-
-      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
-      const usageEvent = events[0];
-      NodeAssert.equal(usageEvent?.type, "thread.token-usage.updated");
-      if (usageEvent?.type !== "thread.token-usage.updated") {
-        return;
-      }
-      NodeAssert.equal("maxTokens" in usageEvent.payload.usage, false);
-      NodeAssert.equal(usageEvent.payload.usage.usedTokens, 70);
-    }),
-  );
-
-  it.effect("re-emits usage once the catalog resolves maxTokens after a message", () =>
-    Effect.gen(function* () {
-      const adapter = yield* OpenCodeAdapter;
-      const threadId = asThreadId("thread-opencode-usage-late-catalog");
-      runtimeMock.state.modelListResults = [
-        {
-          id: "anthropic",
-          models: {
-            "claude-sonnet-4-5": { limit: { context: 200_000 } },
-          },
-        },
-      ];
-      runtimeMock.state.subscribedEvents = [
-        {
-          type: "message.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "msg-usage-late-catalog",
-              role: "assistant",
-              modelID: "claude-sonnet-4-5",
-              providerID: "anthropic",
-              tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-            },
-          },
-        },
-        {
-          type: "session.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "http://127.0.0.1:9999/session",
-              model: { id: "claude-sonnet-4-5", providerID: "anthropic" },
-              tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-            },
-          },
-        },
-      ];
-
-      const eventsFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter(
-          (event) => event.threadId === threadId && event.type === "thread.token-usage.updated",
-        ),
-        Stream.take(2),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
-
-      yield* adapter.startSession({
-        provider: ProviderDriverKind.make("opencode"),
-        threadId,
-        runtimeMode: "full-access",
-      });
-
-      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
-      NodeAssert.equal(events.length, 2);
-      const [first, second] = events;
-      NodeAssert.equal(first?.type, "thread.token-usage.updated");
-      NodeAssert.equal(second?.type, "thread.token-usage.updated");
-      if (
-        first?.type !== "thread.token-usage.updated" ||
-        second?.type !== "thread.token-usage.updated"
-      ) {
-        return;
-      }
-      NodeAssert.equal("maxTokens" in first.payload.usage, false);
-      NodeAssert.equal(second.payload.usage.maxTokens, 200_000);
-    }),
-  );
-
   it.effect("re-resolves maxTokens when the session model changes", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
       const threadId = asThreadId("thread-opencode-usage-model-switch");
       runtimeMock.state.modelListResults = [
-        {
-          id: "anthropic",
-          models: {
-            "claude-sonnet-4-5": { limit: { context: 200_000 } },
-          },
-        },
-        {
-          id: "openai",
-          models: {
-            "gpt-5": { limit: { context: 128_000 } },
-          },
-        },
+        ...usageCatalog,
+        { id: "openai", models: { "gpt-5": { limit: { context: 128_000 } } } },
       ];
       runtimeMock.state.subscribedEvents = [
-        {
-          type: "message.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "msg-usage-model-switch",
-              role: "assistant",
-              modelID: "claude-sonnet-4-5",
-              providerID: "anthropic",
-              tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-            },
-          },
-        },
-        {
-          type: "session.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "http://127.0.0.1:9999/session",
-              model: { id: "claude-sonnet-4-5", providerID: "anthropic" },
-              tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-            },
-          },
-        },
-        {
-          type: "session.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "http://127.0.0.1:9999/session",
-              model: { id: "gpt-5", providerID: "openai" },
-              tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-            },
-          },
-        },
+        usageAssistantMessage("msg-usage-model-switch"),
+        usageSessionUpdate(),
+        usageSessionUpdate({ model: { id: "gpt-5", providerID: "openai" } }),
       ];
 
-      const eventsFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter(
-          (event) => event.threadId === threadId && event.type === "thread.token-usage.updated",
-        ),
-        Stream.take(3),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
+      const eventsFiber = yield* collectUsageEvents(adapter, threadId, 3);
 
-      yield* adapter.startSession({
-        provider: ProviderDriverKind.make("opencode"),
-        threadId,
-        runtimeMode: "full-access",
-      });
+      yield* startUsageSession(adapter, threadId);
 
       const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
       const maxTokensByEvent = events.map((event) => {
@@ -5545,59 +5251,19 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
         const threadId = asThreadId("thread-opencode-usage-model-switch-failure");
-        runtimeMock.state.modelListResults = [
-          {
-            id: "anthropic",
-            models: {
-              "claude-sonnet-4-5": { limit: { context: 200_000 } },
-            },
-          },
-        ];
+        runtimeMock.state.modelListResults = usageCatalog;
         const switchedSessionUpdate = promiseWithResolvers<unknown>();
         const switchBackSessionUpdate = promiseWithResolvers<unknown>();
         runtimeMock.state.subscribedEvents = [
-          {
-            type: "message.updated",
-            properties: {
-              sessionID: "http://127.0.0.1:9999/session",
-              info: {
-                id: "msg-usage-switch-failure",
-                role: "assistant",
-                modelID: "claude-sonnet-4-5",
-                providerID: "anthropic",
-                tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-              },
-            },
-          },
-          {
-            type: "session.updated",
-            properties: {
-              sessionID: "http://127.0.0.1:9999/session",
-              info: {
-                id: "http://127.0.0.1:9999/session",
-                model: { id: "claude-sonnet-4-5", providerID: "anthropic" },
-                tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-              },
-            },
-          },
+          usageAssistantMessage("msg-usage-switch-failure"),
+          usageSessionUpdate(),
           switchedSessionUpdate.promise,
           switchBackSessionUpdate.promise,
         ];
 
-        const eventsFiber = yield* adapter.streamEvents.pipe(
-          Stream.filter(
-            (event) => event.threadId === threadId && event.type === "thread.token-usage.updated",
-          ),
-          Stream.take(2),
-          Stream.runCollect,
-          Effect.forkChild,
-        );
+        const eventsFiber = yield* collectUsageEvents(adapter, threadId, 2);
 
-        yield* adapter.startSession({
-          provider: ProviderDriverKind.make("opencode"),
-          threadId,
-          runtimeMode: "full-access",
-        });
+        yield* startUsageSession(adapter, threadId);
 
         const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
         NodeAssert.equal(events.length, 2);
@@ -5619,17 +5285,9 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
           Stream.runCollect,
           Effect.forkChild,
         );
-        switchedSessionUpdate.resolve({
-          type: "session.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "http://127.0.0.1:9999/session",
-              model: { id: "gpt-5", providerID: "openai" },
-              tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-            },
-          },
-        });
+        switchedSessionUpdate.resolve(
+          usageSessionUpdate({ model: { id: "gpt-5", providerID: "openai" } }),
+        );
 
         const failureEvents = Array.from(
           yield* Fiber.join(failureEventsFiber).pipe(Effect.timeout("1 second")),
@@ -5653,17 +5311,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
           Stream.runCollect,
           Effect.forkChild,
         );
-        switchBackSessionUpdate.resolve({
-          type: "session.updated",
-          properties: {
-            sessionID: "http://127.0.0.1:9999/session",
-            info: {
-              id: "http://127.0.0.1:9999/session",
-              model: { id: "claude-sonnet-4-5", providerID: "anthropic" },
-              tokens: { input: 50, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
-            },
-          },
-        });
+        switchBackSessionUpdate.resolve(usageSessionUpdate());
 
         const switchBackEvents = Array.from(
           yield* Fiber.join(switchBackEventsFiber).pipe(Effect.timeout("1 second")),
