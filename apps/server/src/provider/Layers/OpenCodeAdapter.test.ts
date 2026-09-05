@@ -30,6 +30,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { ServerConfig } from "../../config.ts";
@@ -49,6 +50,7 @@ import {
   mergeOpenCodeAssistantText,
   normalizeOpenCodeTokenCounts,
   normalizeOpenCodeTokenUsage,
+  trimContributionTurnMap,
 } from "./OpenCodeAdapter.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
@@ -8073,6 +8075,40 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       );
 
       yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("bounds the contribution fence map with oldest-first eviction", () =>
+    Effect.gen(function* () {
+      const entries = new Map<string, TurnId>();
+      const turn = TurnId.make("turn-fence-bound");
+      // Past the 1,000-entry bound, the oldest keys go first.
+      for (let index = 0; index < 1_003; index += 1) {
+        entries.set(`msg:${index}`, turn);
+      }
+      NodeAssert.equal(entries.size, 1_003);
+      trimContributionTurnMap(entries);
+      NodeAssert.equal(entries.size, 1_000);
+      NodeAssert.equal(entries.has("msg:0"), false);
+      NodeAssert.equal(entries.has("msg:1"), false);
+      NodeAssert.equal(entries.has("msg:2"), false);
+      NodeAssert.equal(entries.get("msg:3"), turn);
+      NodeAssert.equal(entries.get("msg:1002"), turn);
+    }),
+  );
+
+  it.effect("leaves the contribution fence map alone below the bound", () =>
+    Effect.gen(function* () {
+      const entries = new Map<string, TurnId>();
+      const turn = TurnId.make("turn-fence-small");
+      for (let index = 0; index < 500; index += 1) {
+        entries.set(`msg:${index}`, turn);
+      }
+      trimContributionTurnMap(entries);
+      NodeAssert.equal(entries.size, 500);
+      NodeAssert.equal(entries.get("msg:0"), turn);
+      NodeAssert.equal(entries.get("msg:499"), turn);
+      trimContributionTurnMap(new Map());
     }),
   );
 

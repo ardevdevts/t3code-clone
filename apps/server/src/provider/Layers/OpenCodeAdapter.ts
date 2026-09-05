@@ -82,6 +82,17 @@ const OPENCODE_RESUME_VERSION = 1 as const;
 const OPENCODE_CATALOG_RETRY_COOLDOWN_MS = 30_000;
 
 /**
+ * Bound for the per-turn contribution fence map (`contributionTurnMap`).
+ * Every recorded message/part id is retained so late re-deliveries stay
+ * fenced to their owning turn, which would otherwise grow the map without
+ * bound over a long-lived session. Past this many distinct keys the oldest
+ * entries are evicted first: fencing only matters for recent keys (late
+ * events surface within a turn or two of their original), so eviction trades
+ * a vanishing residual risk for strictly bounded memory.
+ */
+const OPENCODE_CONTRIBUTION_FENCE_LIMIT = 1_000;
+
+/**
  * Decode a persisted resume cursor into the upstream `ses_…` id. Anything
  * that isn't a current-version cursor with a non-empty id means "no resume"
  * rather than an error. Re-adopting the session id IS the resume mechanism —
@@ -284,6 +295,22 @@ function openCodeContributionModelKey(model: unknown, providerId: unknown): stri
     if (id) return `${provider}/${id}`;
   }
   return null;
+}
+
+/**
+ * Evict the oldest fence entries past {@link OPENCODE_CONTRIBUTION_FENCE_LIMIT}.
+ * Exported for unit tests; the record path is its only production caller.
+ * `Map` preserves insertion order, so iterating from the front evicts
+ * least-recently-recorded keys first.
+ */
+export function trimContributionTurnMap(entries: Map<string, TurnId>): void {
+  while (entries.size > OPENCODE_CONTRIBUTION_FENCE_LIMIT) {
+    const oldest = entries.keys().next();
+    if (oldest.done) {
+      return;
+    }
+    entries.delete(oldest.value);
+  }
 }
 
 /**
@@ -595,8 +622,9 @@ interface OpenCodeSessionContext {
   /**
    * Owning turn per contribution key. Late events from a prior turn must not
    * contaminate the new turn's totals, so a key already seen under a
-   * different turn is fenced out. Retained across turns (bounded by
-   * message/part count) — clearing it would re-admit stale reports as new.
+   * different turn is fenced out. Retained across turns, but bounded by
+   * {@link OPENCODE_CONTRIBUTION_FENCE_LIMIT} with oldest-first eviction —
+   * fencing only matters for recent keys.
    */
   contributionTurnMap: Map<string, TurnId>;
   /** Suffix source for contributions without a stable id. */
@@ -2088,6 +2116,9 @@ export function makeOpenCodeAdapter(
           }
         } else if (turnId !== undefined) {
           context.contributionTurnMap.set(dedupeKey, turnId);
+          // The fence map outlives turns by design; keep it bounded so
+          // long-lived sessions cannot accumulate ids without limit.
+          trimContributionTurnMap(context.contributionTurnMap);
         }
       }
       if (turnId === undefined || turnId !== context.activeTurnId) {
