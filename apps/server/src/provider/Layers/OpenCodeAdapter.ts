@@ -200,6 +200,93 @@ export function normalizeOpenCodeTokenUsage(input: {
 }
 
 /**
+ * Per-source token report feeding the per-turn contribution ledger (ported
+ * from #8918's live-usage accounting). Unlike {@link OpenCodeTokenCounts}
+ * (flat, clamped, meter-oriented), this keeps the nested cache shape and an
+ * optional `total` so merged turn totals stay faithful to what OpenCode
+ * reported per message/part.
+ */
+interface OpenCodeTurnTokens {
+  readonly input: number;
+  readonly output: number;
+  readonly reasoning: number;
+  readonly cache: { readonly read: number; readonly write: number };
+  readonly total?: number | undefined;
+}
+
+function readOpenCodeTurnTokens(value: unknown): OpenCodeTurnTokens | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const input = typeof record.input === "number" ? record.input : null;
+  const output = typeof record.output === "number" ? record.output : null;
+  if (input === null || output === null) return null;
+  const reasoning = typeof record.reasoning === "number" ? record.reasoning : 0;
+  const cacheRaw = record.cache;
+  let cacheRead = 0;
+  let cacheWrite = 0;
+  if (typeof cacheRaw === "object" && cacheRaw !== null) {
+    const cache = cacheRaw as Record<string, unknown>;
+    cacheRead = typeof cache.read === "number" ? cache.read : 0;
+    cacheWrite = typeof cache.write === "number" ? cache.write : 0;
+  }
+  const total = typeof record.total === "number" ? record.total : undefined;
+  return {
+    input,
+    output,
+    reasoning,
+    cache: { read: cacheRead, write: cacheWrite },
+    ...(total !== undefined ? { total } : {}),
+  };
+}
+
+function mergeOpenCodeTurnTokens(a: OpenCodeTurnTokens, b: OpenCodeTurnTokens): OpenCodeTurnTokens {
+  const totalA = a.total ?? a.input + a.output + a.cache.read + a.cache.write;
+  const totalB = b.total ?? b.input + b.output + b.cache.read + b.cache.write;
+  const hasTotal = a.total !== undefined || b.total !== undefined;
+  return {
+    input: a.input + b.input,
+    output: a.output + b.output,
+    reasoning: a.reasoning + b.reasoning,
+    cache: { read: a.cache.read + b.cache.read, write: a.cache.write + b.cache.write },
+    ...(hasTotal ? { total: totalA + totalB } : {}),
+  };
+}
+
+/**
+ * Model key (`provider/model`) for a token report's per-model bucket. Accepts
+ * the string and object model shapes OpenCode emits on messages and parts;
+ * defaults an absent provider to `opencode`. Returns null when no model id is
+ * present — the report still counts toward turn totals, just not toward any
+ * per-model bucket.
+ */
+function openCodeContributionModelKey(model: unknown, providerId: unknown): string | null {
+  if (typeof model === "string" && model.trim().length > 0) {
+    const provider =
+      typeof providerId === "string" && providerId.trim().length > 0
+        ? providerId.trim()
+        : "opencode";
+    return `${provider}/${model.trim()}`;
+  }
+  if (typeof model === "object" && model !== null) {
+    const record = model as Record<string, unknown>;
+    const id =
+      typeof record.id === "string"
+        ? record.id
+        : typeof record.modelID === "string"
+          ? record.modelID
+          : null;
+    const provider =
+      typeof record.providerID === "string"
+        ? record.providerID
+        : typeof record.provider === "string"
+          ? record.provider
+          : "opencode";
+    if (id) return `${provider}/${id}`;
+  }
+  return null;
+}
+
+/**
  * Whether an error definitively reports a missing session. Only a confirmed
  * miss may silently start a fresh session; any other failure (the SDK client
  * is `throwOnError: true`, so `session.get` rejects on every non-2xx) must
@@ -488,6 +575,32 @@ interface OpenCodeSessionContext {
   maxTokensLastAttemptMs: number | undefined;
   /** Dedupe key of the last emitted `thread.token-usage.updated`. */
   lastEmittedTokenUsageKey: string | undefined;
+  /**
+   * Per-turn token contribution ledger (ported from #8918's live-usage
+   * accounting). Each message/part id contributes one report keyed
+   * `msg:<id>` / `part:<id>`; a same-id re-emission carries that source's
+   * updated totals and *replaces* its entry, while distinct ids (tool steps)
+   * each contribute — totals are merged across entries. This is the
+   * cumulative-processed view that complements the meter's latest-message
+   * context-occupancy view; the two are kept distinct on purpose.
+   */
+  turnContributionEntries: Map<
+    string,
+    {
+      readonly tokens: OpenCodeTurnTokens;
+      readonly cost: number | null;
+      readonly modelKey: string | null;
+    }
+  >;
+  /**
+   * Owning turn per contribution key. Late events from a prior turn must not
+   * contaminate the new turn's totals, so a key already seen under a
+   * different turn is fenced out. Retained across turns (bounded by
+   * message/part count) — clearing it would re-admit stale reports as new.
+   */
+  contributionTurnMap: Map<string, TurnId>;
+  /** Suffix source for contributions without a stable id. */
+  contributionCounter: number;
   turnTokenUsage: OpenCodeTurnTokenUsageAccumulator | undefined;
   activeTurnId: TurnId | undefined;
   activeAgent: string | undefined;
@@ -1253,6 +1366,10 @@ export function makeOpenCodeAdapter(
         context.pendingIdleReconciliation = undefined;
       }
       const tokenUsage = takeOpenCodeTurnTokenUsage(context, true);
+      // Per-turn contribution ledger (ported from #8918): merged message
+      // reports plus per-model buckets and summed cost for the usage page.
+      // Empty ledgers (e.g. zero-token-only turns) attach nothing.
+      const contributions = takeOpenCodeTurnContributions(context);
       context.activeTurnId = undefined;
       context.activeAgent = undefined;
       context.activeVariant = undefined;
@@ -1283,6 +1400,15 @@ export function makeOpenCodeAdapter(
         payload: {
           state: "completed",
           tokenUsage,
+          ...(contributions.usage
+            ? {
+                usage: contributions.usage,
+                ...(contributions.modelUsage ? { modelUsage: contributions.modelUsage } : {}),
+              }
+            : {}),
+          ...(contributions.totalCostUsd !== undefined
+            ? { totalCostUsd: contributions.totalCostUsd }
+            : {}),
         },
       });
     });
@@ -1421,6 +1547,9 @@ export function makeOpenCodeAdapter(
         return;
       }
       const tokenUsage = takeOpenCodeTurnTokenUsage(context, false);
+      // The turn ends failed: drop its contribution ledger with it so a
+      // later turn never inherits these reports.
+      clearOpenCodeTurnContributions(context);
       context.promptAdmission = undefined;
       context.activeTurnId = undefined;
       context.activeAgent = undefined;
@@ -1627,6 +1756,8 @@ export function makeOpenCodeAdapter(
       };
       if (context.activeTurnId === turnId) {
         tokenUsage = takeOpenCodeTurnTokenUsage(context, false);
+        // The turn ends interrupted: drop its contribution ledger with it.
+        clearOpenCodeTurnContributions(context);
         context.activeTurnId = undefined;
         context.activeAgent = undefined;
         context.activeVariant = undefined;
@@ -1920,6 +2051,103 @@ export function makeOpenCodeAdapter(
         payload: { usage },
       });
     });
+
+    /**
+     * Record one per-source token report into the active turn's contribution
+     * ledger (ported from #8918). Zero-token reports carry no usage and are
+     * skipped, so e.g. compaction summaries never populate the ledger. A
+     * report whose key was already seen under a *different* turn is a late
+     * event from a prior turn and is fenced out instead of contaminating the
+     * new turn's totals. Reports for any other turn (or no turn) are ignored:
+     * only the active turn accumulates. Part-level reports feed turn
+     * accounting only — the context-window meter keeps reflecting
+     * latest-message occupancy plus session cumulative totals.
+     */
+    const recordOpenCodeTurnContribution = (
+      context: OpenCodeSessionContext,
+      input: {
+        readonly tokens: OpenCodeTurnTokens;
+        readonly cost: number | null;
+        readonly modelKey: string | null;
+        readonly dedupeKey: string | undefined;
+        readonly turnId: TurnId | undefined;
+      },
+    ): void => {
+      const { tokens, cost, modelKey, dedupeKey, turnId } = input;
+      if (
+        tokens.input + tokens.output + tokens.cache.read + tokens.cache.write === 0 &&
+        tokens.total === undefined
+      ) {
+        return;
+      }
+      if (dedupeKey !== undefined) {
+        const owningTurn = context.contributionTurnMap.get(dedupeKey);
+        if (owningTurn !== undefined) {
+          if (turnId === undefined || owningTurn !== turnId) {
+            return;
+          }
+        } else if (turnId !== undefined) {
+          context.contributionTurnMap.set(dedupeKey, turnId);
+        }
+      }
+      if (turnId === undefined || turnId !== context.activeTurnId) {
+        return;
+      }
+      const key = dedupeKey ?? `generic:${context.contributionCounter++}`;
+      context.turnContributionEntries.set(key, { tokens, cost, modelKey });
+    };
+
+    /**
+     * Take the active turn's merged contribution totals for `turn.completed`
+     * and reset the per-turn ledger (the cross-turn fence map is retained so
+     * late events stay fenced). Same-id re-emissions were replaced on record,
+     * so merging across entries sums each source once; cost sums the same
+     * way, and per-model buckets merge independently. Absent cost/model data
+     * stays absent rather than becoming zero/unknown.
+     */
+    const takeOpenCodeTurnContributions = (
+      context: OpenCodeSessionContext,
+    ): {
+      readonly usage: OpenCodeTurnTokens | undefined;
+      readonly modelUsage: Record<string, OpenCodeTurnTokens> | undefined;
+      readonly totalCostUsd: number | undefined;
+    } => {
+      let merged: OpenCodeTurnTokens | null = null;
+      let costSum = 0;
+      let hasCost = false;
+      const modelUsage = new Map<string, OpenCodeTurnTokens>();
+      for (const entry of context.turnContributionEntries.values()) {
+        merged = merged === null ? entry.tokens : mergeOpenCodeTurnTokens(merged, entry.tokens);
+        if (entry.cost !== null) {
+          costSum += entry.cost;
+          hasCost = true;
+        }
+        if (entry.modelKey !== null) {
+          const existing = modelUsage.get(entry.modelKey);
+          modelUsage.set(
+            entry.modelKey,
+            existing ? mergeOpenCodeTurnTokens(existing, entry.tokens) : entry.tokens,
+          );
+        }
+      }
+      context.turnContributionEntries.clear();
+      context.contributionCounter = 0;
+      return {
+        usage: merged ?? undefined,
+        modelUsage: modelUsage.size > 0 ? Object.fromEntries(modelUsage) : undefined,
+        totalCostUsd: hasCost ? costSum : undefined,
+      };
+    };
+
+    /**
+     * Drop the per-turn contribution ledger without emitting (turns that end
+     * failed, aborted, or interrupted carry no contribution payload; the
+     * cross-turn fence map is retained).
+     */
+    const clearOpenCodeTurnContributions = (context: OpenCodeSessionContext): void => {
+      context.turnContributionEntries.clear();
+      context.contributionCounter = 0;
+    };
 
     // Records a child session of this thread. A child seen during a live turn
     // means that turn used subagents, whether the relation came from a
@@ -2622,6 +2850,24 @@ export function makeOpenCodeAdapter(
                 yield* emitOpenCodeTokenUsage(context, { turnId, raw: event });
               }
             }
+            // Per-turn contribution ledger (ported from #8918): same-id
+            // re-emissions replace that message's report, distinct ids
+            // (tool steps) each contribute; merged on turn completion into
+            // `usage`/`modelUsage`/`totalCostUsd`. Deliberately message-level
+            // only: part-level reports have unproven overlap semantics with
+            // their parent message totals, and none of the preserved cases
+            // exercise them.
+            const contributionTokens = readOpenCodeTurnTokens(info.tokens);
+            if (contributionTokens) {
+              recordOpenCodeTurnContribution(context, {
+                tokens: contributionTokens,
+                cost:
+                  typeof info.cost === "number" && Number.isFinite(info.cost) ? info.cost : null,
+                modelKey: openCodeContributionModelKey(info.modelID, info.providerID),
+                dedupeKey: typeof info.id === "string" ? `msg:${info.id}` : undefined,
+                turnId,
+              });
+            }
             const usage = context.turnTokenUsage;
             const parentMessageId =
               typeof info.parentID === "string" && info.parentID.trim().length > 0
@@ -2926,6 +3172,8 @@ export function makeOpenCodeAdapter(
             terminalCancellation.acknowledged = true;
           }
           const tokenUsage = activeTurnId ? takeOpenCodeTurnTokenUsage(context, false) : undefined;
+          // The turn ends failed: drop its contribution ledger with it.
+          clearOpenCodeTurnContributions(context);
           context.activeTurnId = undefined;
           context.activeAgent = undefined;
           context.activeVariant = undefined;
@@ -3278,6 +3526,9 @@ export function makeOpenCodeAdapter(
           maxTokensLastAttemptModelKey: undefined,
           maxTokensLastAttemptMs: undefined,
           lastEmittedTokenUsageKey: undefined,
+          turnContributionEntries: new Map(),
+          contributionTurnMap: new Map(),
+          contributionCounter: 0,
           turnTokenUsage: undefined,
           activeTurnId: undefined,
           activeAgent: undefined,
@@ -3544,6 +3795,8 @@ export function makeOpenCodeAdapter(
                         return;
                       }
                       const tokenUsage = takeOpenCodeTurnTokenUsage(context, false);
+                      // The turn ends aborted: drop its contribution ledger with it.
+                      clearOpenCodeTurnContributions(context);
                       context.promptAdmission = undefined;
                       context.activeTurnId = undefined;
                       context.activeAgent = undefined;
@@ -3592,6 +3845,8 @@ export function makeOpenCodeAdapter(
                       return;
                     }
                     const tokenUsage = takeOpenCodeTurnTokenUsage(context, false);
+                    // The turn ends aborted: drop its contribution ledger with it.
+                    clearOpenCodeTurnContributions(context);
                     context.promptAdmission = undefined;
                     context.activeTurnId = undefined;
                     context.activeAgent = undefined;
