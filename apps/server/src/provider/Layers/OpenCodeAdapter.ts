@@ -2103,7 +2103,8 @@ export function makeOpenCodeAdapter(
     ): void => {
       const { tokens, cost, modelKey, dedupeKey, turnId } = input;
       if (
-        tokens.input + tokens.output + tokens.cache.read + tokens.cache.write === 0 &&
+        tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write ===
+          0 &&
         tokens.total === undefined
       ) {
         return;
