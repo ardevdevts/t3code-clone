@@ -15,6 +15,7 @@ import {
   type UserInputQuestion,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -70,6 +71,17 @@ const PROVIDER = ProviderDriverKind.make("opencode");
 const OPENCODE_RESUME_VERSION = 1 as const;
 
 /**
+ * Cooldown between failed context-window catalog (`provider.list`) attempts
+ * for the same model. The lookup runs on the sequential event pump, so an
+ * outage must not stall deltas, permission asks, and turn completions on
+ * every `session.updated` replay — one bounded attempt per window is enough,
+ * and the meter keeps rendering the raw token count meanwhile. A model
+ * switch bypasses the cooldown because it is a different lookup, not a
+ * retry of the failed one.
+ */
+const OPENCODE_CATALOG_RETRY_COOLDOWN_MS = 30_000;
+
+/**
  * Decode a persisted resume cursor into the upstream `ses_…` id. Anything
  * that isn't a current-version cursor with a non-empty id means "no resume"
  * rather than an error. Re-adopting the session id IS the resume mechanism —
@@ -108,7 +120,9 @@ export function normalizeOpenCodeTokenCounts(tokens: {
   readonly input?: number | undefined;
   readonly output?: number | undefined;
   readonly reasoning?: number | undefined;
-  readonly cache?: { readonly read?: number | undefined; readonly write?: number | undefined } | undefined;
+  readonly cache?:
+    | { readonly read?: number | undefined; readonly write?: number | undefined }
+    | undefined;
 }): OpenCodeTokenCounts {
   // Guard against partial payloads: a missing or non-finite count clamps to
   // zero instead of leaking NaN into the usage snapshot (mirrors OpenCode's
@@ -462,6 +476,16 @@ interface OpenCodeSessionContext {
   maxTokens: number | undefined;
   /** Model key the resolved `maxTokens` belongs to; re-resolve on change. */
   maxTokensModelKey: string | undefined;
+  /**
+   * Model key of the last failed catalog attempt, with its wall-clock time.
+   * Gates retries for the same model behind
+   * {@link OPENCODE_CATALOG_RETRY_COOLDOWN_MS} so a catalog outage stalls the
+   * sequential event pump at most once per window instead of once per
+   * `session.updated` replay. Cleared on success (the resolved key takes
+   * over) and bypassed on model switch (different model, not a retry).
+   */
+  maxTokensLastAttemptModelKey: string | undefined;
+  maxTokensLastAttemptMs: number | undefined;
   /** Dedupe key of the last emitted `thread.token-usage.updated`. */
   lastEmittedTokenUsageKey: string | undefined;
   turnTokenUsage: OpenCodeTurnTokenUsageAccumulator | undefined;
@@ -1762,14 +1786,18 @@ export function makeOpenCodeAdapter(
      * catalog once per model, best-effort: an unknown model leaves `maxTokens`
      * unset and the meter renders the raw token count. A failed or timed-out
      * catalog call does not count as resolved, so a transient failure retries
-     * on the next `session.updated`. Uses the same v1 `provider.list` endpoint
-     * the runtime already relies on for inventory, so the response shape is
-     * proven. Bounded by a short timeout because it runs on the event-pump
-     * path: a wedged catalog request must leave `maxTokens` unresolved rather
-     * than stall assistant deltas, requests, and turn completions. A model
-     * switch drops the previously resolved limit (and its model key) up
-     * front, so a failed lookup reports no capacity rather than the previous
-     * model's, and switching back to the old model re-resolves it.
+     * on a later `session.updated` once the cooldown lapses. Uses the same v1
+     * `provider.list` endpoint the runtime already relies on for inventory, so
+     * the response shape is proven. Bounded by a short timeout because it runs
+     * on the event-pump path: a wedged catalog request must leave `maxTokens`
+     * unresolved rather than stall assistant deltas, requests, and turn
+     * completions. Failed attempts for the same model are gated behind a
+     * cooldown so an outage (or a burst of unchanged `session.updated`
+     * replays) stalls the sequential pump at most once per window instead of
+     * once per event. A model switch bypasses the cooldown and drops the
+     * previously resolved limit (and its model key) up front, so a failed
+     * lookup reports no capacity rather than the previous model's, and
+     * switching back to the old model re-resolves it.
      */
     const resolveOpenCodeMaxTokens = Effect.fn("resolveOpenCodeMaxTokens")(function* (
       context: OpenCodeSessionContext,
@@ -1783,14 +1811,29 @@ export function makeOpenCodeAdapter(
       if (context.maxTokensModelKey === modelKey) {
         return;
       }
+      const now = yield* Clock.currentTimeMillis;
+      const lastAttemptMs = context.maxTokensLastAttemptMs;
+      if (
+        context.maxTokensLastAttemptModelKey === modelKey &&
+        lastAttemptMs !== undefined &&
+        now >= lastAttemptMs &&
+        now - lastAttemptMs < OPENCODE_CATALOG_RETRY_COOLDOWN_MS
+      ) {
+        // Same model failed recently: leave `maxTokens` unresolved without
+        // paying another bounded stall on the pump. The next `session.updated`
+        // after the cooldown retries.
+        return;
+      }
       // A model switch invalidates the previous resolution: the old limit is
       // another model's capacity and must not leak into the next emitted
       // snapshot. Dropping the model key too keeps the switch-back case
       // honest — it re-resolves instead of early-returning on a stale key.
       context.maxTokens = undefined;
       context.maxTokensModelKey = undefined;
-      const outcome = yield* runOpenCodeSdk("provider.list", () =>
-        context.client.provider.list(),
+      context.maxTokensLastAttemptModelKey = modelKey;
+      context.maxTokensLastAttemptMs = now;
+      const outcome = yield* runOpenCodeSdk("provider.list", (signal) =>
+        context.client.provider.list(undefined, { signal }),
       ).pipe(
         Effect.map((response) => {
           const providers = response.data?.all;
@@ -1804,14 +1847,18 @@ export function makeOpenCodeAdapter(
             : undefined;
         }),
         // Event-pump path: never let an unresolved catalog request hold the
-        // pump hostage. The timeout surfaces as a failure, which leaves the
-        // model unresolved so the next `session.updated` retries.
+        // pump hostage. The timeout interrupts the SDK fetch via the abort
+        // signal (so a timed-out request cannot linger and pile up behind the
+        // next retry) and surfaces as a failure, which leaves the model
+        // unresolved so a later `session.updated` retries after the cooldown.
         Effect.timeout("5 seconds"),
         Effect.exit,
       );
       if (Exit.isSuccess(outcome)) {
         context.maxTokensModelKey = modelKey;
         context.maxTokens = outcome.value;
+        context.maxTokensLastAttemptModelKey = undefined;
+        context.maxTokensLastAttemptMs = undefined;
       }
     });
 
@@ -3228,6 +3275,8 @@ export function makeOpenCodeAdapter(
           cumulativeSessionCost: undefined,
           maxTokens: undefined,
           maxTokensModelKey: undefined,
+          maxTokensLastAttemptModelKey: undefined,
+          maxTokensLastAttemptMs: undefined,
           lastEmittedTokenUsageKey: undefined,
           turnTokenUsage: undefined,
           activeTurnId: undefined,

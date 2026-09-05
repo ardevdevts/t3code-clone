@@ -134,6 +134,7 @@ const runtimeMock = {
     modelListCalls: 0,
     modelListResults: [] as Array<Record<string, unknown>>,
     modelListError: null as Error | null,
+    modelListSignals: [] as Array<AbortSignal | undefined>,
   },
   reset() {
     this.state.startCalls.length = 0;
@@ -192,6 +193,7 @@ const runtimeMock = {
     this.state.modelListCalls = 0;
     this.state.modelListResults = [];
     this.state.modelListError = null;
+    this.state.modelListSignals.length = 0;
   },
 };
 
@@ -506,8 +508,9 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
         },
       },
       provider: {
-        list: async () => {
+        list: async (_params?: unknown, options?: { signal?: AbortSignal }) => {
           runtimeMock.state.modelListCalls += 1;
+          runtimeMock.state.modelListSignals.push(options?.signal);
           if (runtimeMock.state.modelListError) {
             throw runtimeMock.state.modelListError;
           }
@@ -7395,11 +7398,19 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         NodeAssert.equal("maxTokens" in first.payload.usage, false);
         NodeAssert.equal(first.payload.usage.usedTokens, 70);
         NodeAssert.equal(runtimeMock.state.modelListCalls, 1);
+        // The catalog lookup runs on the sequential event pump, so it must
+        // carry the abort signal — the 5s timeout interrupts the fetch rather
+        // than leaving a wedged request behind the next retry.
+        NodeAssert.ok(runtimeMock.state.modelListSignals[0] instanceof AbortSignal);
 
-        // The catalog comes back: a later session.updated must retry the
-        // resolution instead of giving up for the session's lifetime.
+        // The catalog comes back: a later session.updated after the retry
+        // cooldown must retry the resolution instead of giving up for the
+        // session's lifetime. Same-model failures inside the cooldown window
+        // skip the bounded lookup so an outage (or a burst of unchanged
+        // replays) stalls the pump at most once per window.
         runtimeMock.state.modelListError = null;
         runtimeMock.state.modelListResults = usageCatalog;
+        yield* TestClock.adjust("31 seconds");
         const secondEventsFiber = yield* collectUsageEvents(adapter, threadId, 1);
         recoveredSessionUpdate.resolve(
           usageSessionUpdate({
@@ -7418,6 +7429,71 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         NodeAssert.equal(second.payload.usage.maxTokens, 200_000);
         NodeAssert.equal(runtimeMock.state.modelListCalls, 2);
       }),
+  );
+
+  it.effect("cools down same-model catalog retries so replays do not stall the pump", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-usage-catalog-cooldown");
+      runtimeMock.state.modelListError = new Error("catalog offline");
+      const replayedSessionUpdate = promiseWithResolvers<unknown>();
+      const recoveredSessionUpdate = promiseWithResolvers<unknown>();
+      runtimeMock.state.subscribedEvents = [
+        usageAssistantMessage("msg-usage-catalog-cooldown"),
+        usageSessionUpdate(),
+        replayedSessionUpdate.promise,
+        usageMarkerSessionUpdate("cooldown-marker"),
+        recoveredSessionUpdate.promise,
+      ];
+
+      const eventsFiber = yield* collectUsageEvents(adapter, threadId, 1);
+      yield* startUsageSession(adapter, threadId);
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+      NodeAssert.equal(events.length, 1);
+      NodeAssert.equal(runtimeMock.state.modelListCalls, 1);
+
+      // An unchanged replay inside the cooldown must not pay another bounded
+      // lookup on the sequential pump. Drain through the marker (its metadata
+      // event proves the replay finished processing): no extra catalog call.
+      const drainFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.takeUntil(
+          (event) =>
+            event.type === "thread.metadata.updated" && event.payload.name === "cooldown-marker",
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      replayedSessionUpdate.resolve(usageSessionUpdate());
+      const drained = Array.from(yield* Fiber.join(drainFiber).pipe(Effect.timeout("1 second")));
+      const drainedUsage = drained.filter((event) => event.type === "thread.token-usage.updated");
+      // The replay carries identical tokens, so the deduped meter emits
+      // nothing new — and the cooldown means no second catalog call either.
+      NodeAssert.equal(drainedUsage.length, 0);
+      NodeAssert.equal(runtimeMock.state.modelListCalls, 1);
+
+      // After the cooldown the next session.updated retries and resolves.
+      runtimeMock.state.modelListError = null;
+      runtimeMock.state.modelListResults = usageCatalog;
+      yield* TestClock.adjust("31 seconds");
+      const recoveredEventsFiber = yield* collectUsageEvents(adapter, threadId, 1);
+      recoveredSessionUpdate.resolve(
+        usageSessionUpdate({
+          tokens: { input: 60, output: 10, reasoning: 5, cache: { read: 20, write: 0 } },
+        }),
+      );
+      const recoveredEvents = Array.from(
+        yield* Fiber.join(recoveredEventsFiber).pipe(Effect.timeout("1 second")),
+      );
+      NodeAssert.equal(recoveredEvents.length, 1);
+      const recovered = recoveredEvents[0];
+      NodeAssert.equal(recovered?.type, "thread.token-usage.updated");
+      if (recovered?.type !== "thread.token-usage.updated") {
+        return;
+      }
+      NodeAssert.equal(recovered.payload.usage.maxTokens, 200_000);
+      NodeAssert.equal(runtimeMock.state.modelListCalls, 2);
+    }),
   );
 
   it.effect("keeps per-message usage when a zero-token message arrives", () =>
