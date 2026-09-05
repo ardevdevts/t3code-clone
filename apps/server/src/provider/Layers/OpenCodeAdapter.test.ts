@@ -6522,41 +6522,25 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
-  it.effect("clamps partial, non-finite, and negative token counts to zero", () =>
+  it.effect("normalizes OpenCode token reports into context-window snapshots", () =>
     Effect.sync(() => {
-      const counts = normalizeOpenCodeTokenCounts({
-        input: NaN,
-        output: -40,
-        reasoning: Number.POSITIVE_INFINITY,
-        cache: { read: 11.9, write: undefined },
-      });
-      NodeAssert.deepEqual(counts, {
-        input: 0,
-        output: 0,
-        reasoning: 0,
-        cacheRead: 12,
-        cacheWrite: 0,
-      });
+      // Non-finite, negative, and fractional counts clamp to whole zeros.
+      NodeAssert.deepEqual(
+        normalizeOpenCodeTokenCounts({
+          input: NaN,
+          output: -40,
+          reasoning: Number.POSITIVE_INFINITY,
+          cache: { read: 11.9, write: undefined },
+        }),
+        { input: 0, output: 0, reasoning: 0, cacheRead: 12, cacheWrite: 0 },
+      );
 
       // A payload missing the whole cache object must not throw.
-      const withoutCache = normalizeOpenCodeTokenCounts({
-        input: 3,
-        output: 4,
-        reasoning: 0,
-        cache: undefined,
-      });
-      NodeAssert.deepEqual(withoutCache, {
-        input: 3,
-        output: 4,
-        reasoning: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-      });
-    }),
-  );
+      NodeAssert.deepEqual(
+        normalizeOpenCodeTokenCounts({ input: 3, output: 4, reasoning: 0, cache: undefined }),
+        { input: 3, output: 4, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+      );
 
-  it.effect("maps OpenCode token counts into a context-window usage snapshot", () =>
-    Effect.sync(() => {
       const counts = normalizeOpenCodeTokenCounts({
         input: 100,
         output: 40,
@@ -6571,49 +6555,47 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         cacheWrite: 13,
       });
 
-      const usage = normalizeOpenCodeTokenUsage({
-        messageTokens: counts,
-        cumulativeTokens: counts,
-        maxTokens: 200_000,
-        cumulativeSessionCost: 0.42,
-      });
-      NodeAssert.deepEqual(usage, {
-        usedTokens: 124,
-        totalProcessedTokens: 171,
-        maxTokens: 200_000,
-        cost: 0.42,
-        inputTokens: 124,
-        cachedInputTokens: 24,
-        outputTokens: 40,
-        reasoningOutputTokens: 7,
-        lastUsedTokens: 124,
-        lastInputTokens: 124,
-        lastCachedInputTokens: 24,
-        lastOutputTokens: 40,
-        lastReasoningOutputTokens: 7,
-      });
-    }),
-  );
+      NodeAssert.deepEqual(
+        normalizeOpenCodeTokenUsage({
+          messageTokens: counts,
+          cumulativeTokens: counts,
+          maxTokens: 200_000,
+          cumulativeSessionCost: 0.42,
+        }),
+        {
+          usedTokens: 124,
+          totalProcessedTokens: 171,
+          maxTokens: 200_000,
+          cost: 0.42,
+          inputTokens: 124,
+          cachedInputTokens: 24,
+          outputTokens: 40,
+          reasoningOutputTokens: 7,
+          lastUsedTokens: 124,
+          lastInputTokens: 124,
+          lastCachedInputTokens: 24,
+          lastOutputTokens: 40,
+          lastReasoningOutputTokens: 7,
+        },
+      );
 
-  it.effect("omits cumulative and breakdown fields OpenCode did not report", () =>
-    Effect.sync(() => {
-      const usage = normalizeOpenCodeTokenUsage({
-        messageTokens: { input: 5, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
-        cumulativeSessionCost: 0,
-      });
-      NodeAssert.deepEqual(usage, {
-        usedTokens: 5,
-        inputTokens: 5,
-        cachedInputTokens: 0,
-        lastUsedTokens: 5,
-        lastInputTokens: 5,
-        lastCachedInputTokens: 0,
-      });
-    }),
-  );
+      // Fields OpenCode did not report stay absent instead of zero-filled.
+      NodeAssert.deepEqual(
+        normalizeOpenCodeTokenUsage({
+          messageTokens: { input: 5, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+          cumulativeSessionCost: 0,
+        }),
+        {
+          usedTokens: 5,
+          inputTokens: 5,
+          cachedInputTokens: 0,
+          lastUsedTokens: 5,
+          lastInputTokens: 5,
+          lastCachedInputTokens: 0,
+        },
+      );
 
-  it.effect("returns no usage until an assistant message reports tokens", () =>
-    Effect.sync(() => {
+      // Reports without message tokens mean no usage yet.
       NodeAssert.equal(
         normalizeOpenCodeTokenUsage({
           cumulativeTokens: { input: 50, output: 10, reasoning: 0, cacheRead: 20, cacheWrite: 0 },
@@ -7712,6 +7694,82 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  it.effect("drops per-turn usage when the turn ends failed", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-failed-usage");
+      const messageUpdatedEvent = promiseWithResolvers<unknown>();
+      const errorEvent = promiseWithResolvers<unknown>();
+      runtimeMock.state.subscribedEvents = [messageUpdatedEvent.promise, errorEvent.promise];
+
+      const turnCompletedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId && event.type === "turn.completed"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId,
+        input: "test failed usage",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "opencode/mimo-test",
+        ),
+      });
+
+      messageUpdatedEvent.resolve({
+        id: "evt-failed-usage-msg",
+        type: "message.updated",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          info: {
+            id: "msg_failed",
+            role: "assistant",
+            tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 10, write: 2 } },
+            cost: 0.001,
+            modelID: "mimo-test",
+            providerID: "opencode",
+          },
+        },
+      });
+
+      yield* Effect.yieldNow;
+
+      errorEvent.resolve({
+        id: "evt-failed-usage-error",
+        type: "session.error",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          error: {
+            name: "APIError",
+            data: { message: "Upstream failed", isRetryable: false },
+          },
+        },
+      });
+
+      const events = Array.from(
+        yield* Fiber.join(turnCompletedFiber).pipe(Effect.timeout("1 second")),
+      );
+      NodeAssert.equal(events.length, 1);
+      const payload = (events[0] as { payload: Record<string, unknown> }).payload;
+      NodeAssert.equal(payload.state, "failed");
+      // The failed turn carries no contribution payload: usage, per-model
+      // buckets, and summed cost are dropped with the ledger.
+      NodeAssert.equal("usage" in payload, false);
+      NodeAssert.equal("modelUsage" in payload, false);
+      NodeAssert.equal("totalCostUsd" in payload, false);
+      NodeAssert.equal(String((events[0] as { turnId: unknown }).turnId), String(turn.turnId));
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("accumulates usage and cost across multiple tool steps", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
@@ -8094,21 +8152,16 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.equal(entries.has("msg:2"), false);
       NodeAssert.equal(entries.get("msg:3"), turn);
       NodeAssert.equal(entries.get("msg:1002"), turn);
-    }),
-  );
 
-  it.effect("leaves the contribution fence map alone below the bound", () =>
-    Effect.gen(function* () {
-      const entries = new Map<string, TurnId>();
-      const turn = TurnId.make("turn-fence-small");
+      // At or below the bound the map is left alone.
+      const small = new Map<string, TurnId>();
       for (let index = 0; index < 500; index += 1) {
-        entries.set(`msg:${index}`, turn);
+        small.set(`msg:${index}`, turn);
       }
-      trimContributionTurnMap(entries);
-      NodeAssert.equal(entries.size, 500);
-      NodeAssert.equal(entries.get("msg:0"), turn);
-      NodeAssert.equal(entries.get("msg:499"), turn);
-      trimContributionTurnMap(new Map());
+      trimContributionTurnMap(small);
+      NodeAssert.equal(small.size, 500);
+      NodeAssert.equal(small.get("msg:0"), turn);
+      NodeAssert.equal(small.get("msg:499"), turn);
     }),
   );
 
