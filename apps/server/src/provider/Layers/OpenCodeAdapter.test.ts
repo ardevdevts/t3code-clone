@@ -7496,6 +7496,586 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  // ---- Live turn-usage accounting (ported from #8918) -----------------------
+  //
+  // #8918 recorded these live-usage cases before it was closed unmerged; they
+  // are preserved here against the current turn machinery. The per-turn
+  // contribution ledger (same-id reports replace, distinct ids accumulate,
+  // late events are fenced to their owning turn) feeds `usage`/`modelUsage`/
+  // `totalCostUsd` on idle `turn.completed`. The context-window meter keeps
+  // its own latest-message occupancy semantics on top (so `inputTokens` below
+  // folds cache in, unlike #8918's raw snapshot).
+
+  it.effect("emits thread.token-usage.updated on message.updated with tokens", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-token-usage");
+      const messageUpdatedEvent = promiseWithResolvers<unknown>();
+      runtimeMock.state.subscribedEvents = [messageUpdatedEvent.promise];
+
+      const tokenUsageFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) => event.threadId === threadId && event.type === "thread.token-usage.updated",
+        ),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "test tokens",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "opencode/mimo-test",
+        ),
+      });
+
+      messageUpdatedEvent.resolve({
+        id: "evt-token-usage",
+        type: "message.updated",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          info: {
+            id: "msg_token",
+            role: "assistant",
+            tokens: { input: 100, output: 50, reasoning: 10, cache: { read: 20, write: 5 } },
+            cost: 0.002,
+            modelID: "mimo-test",
+            providerID: "opencode",
+          },
+        },
+      });
+
+      const events = Array.from(
+        yield* Fiber.join(tokenUsageFiber).pipe(Effect.timeout("1 second")),
+      );
+      NodeAssert.equal(events.length, 1);
+      const usage = (events[0] as { payload: { usage: Record<string, unknown> } }).payload.usage;
+      // Meter semantics: input folds cache in (occupancy), unlike the raw
+      // per-model turn usage below.
+      NodeAssert.equal(usage.inputTokens as number, 125);
+      NodeAssert.equal(usage.cachedInputTokens as number, 25);
+      NodeAssert.equal(usage.outputTokens as number, 50);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("does not emit token usage on zero-token payload", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-zero-token");
+      const messageUpdatedEvent = promiseWithResolvers<unknown>();
+      const idleEvent = promiseWithResolvers<unknown>();
+      runtimeMock.state.subscribedEvents = [messageUpdatedEvent.promise, idleEvent.promise];
+
+      const turnCompletedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId && event.type === "turn.completed"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId,
+        input: "zero tokens",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "opencode/mimo-test",
+        ),
+      });
+
+      messageUpdatedEvent.resolve({
+        id: "evt-zero-token",
+        type: "message.updated",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          info: {
+            id: "msg_zero",
+            role: "assistant",
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            cost: 0,
+            modelID: "mimo-test",
+            providerID: "opencode",
+          },
+        },
+      });
+
+      yield* Effect.yieldNow;
+
+      idleEvent.resolve({
+        id: "evt-zero-idle",
+        type: "session.status",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          status: { type: "idle" },
+        },
+      });
+
+      const events = Array.from(
+        yield* Fiber.join(turnCompletedFiber).pipe(Effect.timeout("1 second")),
+      );
+      NodeAssert.equal(events.length, 1);
+      const payload = (events[0] as { payload: Record<string, unknown> }).payload;
+      NodeAssert.equal(payload.usage, undefined);
+      NodeAssert.equal(String((events[0] as { turnId: unknown }).turnId), String(turn.turnId));
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("idle turn completion carries usage and modelUsage", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-idle-usage");
+      const messageUpdatedEvent = promiseWithResolvers<unknown>();
+      const idleEvent = promiseWithResolvers<unknown>();
+      runtimeMock.state.subscribedEvents = [messageUpdatedEvent.promise, idleEvent.promise];
+
+      const turnCompletedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId && event.type === "turn.completed"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId,
+        input: "test idle usage",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "opencode/mimo-test",
+        ),
+      });
+
+      messageUpdatedEvent.resolve({
+        id: "evt-idle-usage-msg",
+        type: "message.updated",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          info: {
+            id: "msg_idle",
+            role: "assistant",
+            tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 10, write: 2 } },
+            cost: 0.001,
+            modelID: "mimo-test",
+            providerID: "opencode",
+          },
+        },
+      });
+
+      // Yield to let token emission be processed
+      yield* Effect.yieldNow;
+
+      idleEvent.resolve({
+        id: "evt-idle-usage-idle",
+        type: "session.status",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          status: { type: "idle" },
+        },
+      });
+
+      const events = Array.from(
+        yield* Fiber.join(turnCompletedFiber).pipe(Effect.timeout("1 second")),
+      );
+      NodeAssert.equal(events.length, 1);
+      const payload = (events[0] as { payload: Record<string, unknown> }).payload;
+      NodeAssert.equal(payload.state, "completed");
+      NodeAssert.ok(payload.usage);
+      NodeAssert.equal(payload.totalCostUsd as number, 0.001);
+      const modelUsage = payload.modelUsage as Record<string, unknown>;
+      NodeAssert.ok(modelUsage["opencode/mimo-test"]);
+
+      // Ensure turnId matches
+      NodeAssert.equal(String((events[0] as { turnId: unknown }).turnId), String(turn.turnId));
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("accumulates usage and cost across multiple tool steps", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-accumulated-usage");
+      const firstMessage = promiseWithResolvers<unknown>();
+      const secondMessage = promiseWithResolvers<unknown>();
+      const idleEvent = promiseWithResolvers<unknown>();
+      runtimeMock.state.subscribedEvents = [
+        firstMessage.promise,
+        secondMessage.promise,
+        idleEvent.promise,
+      ];
+
+      const turnCompletedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId && event.type === "turn.completed"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId,
+        input: "test accumulation",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "opencode/mimo-test",
+        ),
+      });
+
+      firstMessage.resolve({
+        id: "evt-accum-1",
+        type: "message.updated",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          info: {
+            id: "msg_accum_1",
+            role: "assistant",
+            tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 10, write: 2 } },
+            cost: 0.001,
+            modelID: "mimo-test",
+            providerID: "opencode",
+          },
+        },
+      });
+
+      yield* Effect.yieldNow;
+
+      secondMessage.resolve({
+        id: "evt-accum-2",
+        type: "message.updated",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          info: {
+            id: "msg_accum_2",
+            role: "assistant",
+            tokens: { input: 50, output: 30, reasoning: 10, cache: { read: 5, write: 1 } },
+            cost: 0.002,
+            modelID: "mimo-test",
+            providerID: "opencode",
+          },
+        },
+      });
+
+      yield* Effect.yieldNow;
+
+      idleEvent.resolve({
+        id: "evt-accum-idle",
+        type: "session.status",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          status: { type: "idle" },
+        },
+      });
+
+      const events = Array.from(
+        yield* Fiber.join(turnCompletedFiber).pipe(Effect.timeout("1 second")),
+      );
+      NodeAssert.equal(events.length, 1);
+      const payload = (events[0] as { payload: Record<string, unknown> }).payload;
+      const usage = payload.usage as {
+        input: number;
+        output: number;
+        reasoning: number;
+        cache: { read: number; write: number };
+      };
+      // Input 100+50, output 20+30, cache read 10+5, write 2+1
+      NodeAssert.equal(usage.input, 150);
+      NodeAssert.equal(usage.output, 50);
+      NodeAssert.equal(usage.cache.read, 15);
+      NodeAssert.equal(usage.cache.write, 3);
+      // Cost summed
+      NodeAssert.equal(payload.totalCostUsd as number, 0.003);
+      const modelUsage = payload.modelUsage as Record<string, typeof usage>;
+      NodeAssert.ok(modelUsage["opencode/mimo-test"]);
+      NodeAssert.equal(modelUsage["opencode/mimo-test"].input, 150);
+      NodeAssert.equal(String((events[0] as { turnId: unknown }).turnId), String(turn.turnId));
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("does not double count duplicate message.updated for same id", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-dedupe-usage");
+      const firstMessage = promiseWithResolvers<unknown>();
+      const secondMessage = promiseWithResolvers<unknown>();
+      const idleEvent = promiseWithResolvers<unknown>();
+      runtimeMock.state.subscribedEvents = [
+        firstMessage.promise,
+        secondMessage.promise,
+        idleEvent.promise,
+      ];
+
+      const turnCompletedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId && event.type === "turn.completed"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId,
+        input: "test dedupe",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "opencode/mimo-test",
+        ),
+      });
+
+      firstMessage.resolve({
+        id: "evt-dedupe-1",
+        type: "message.updated",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          info: {
+            id: "msg_dedupe",
+            role: "assistant",
+            tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 10, write: 2 } },
+            cost: 0.001,
+            modelID: "mimo-test",
+            providerID: "opencode",
+          },
+        },
+      });
+
+      yield* Effect.yieldNow;
+
+      // Same message id, updated tokens (cumulative) — should replace, not sum
+      secondMessage.resolve({
+        id: "evt-dedupe-2",
+        type: "message.updated",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          info: {
+            id: "msg_dedupe",
+            role: "assistant",
+            tokens: { input: 150, output: 30, reasoning: 10, cache: { read: 15, write: 3 } },
+            cost: 0.002,
+            modelID: "mimo-test",
+            providerID: "opencode",
+          },
+        },
+      });
+
+      yield* Effect.yieldNow;
+
+      idleEvent.resolve({
+        id: "evt-dedupe-idle",
+        type: "session.status",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          status: { type: "idle" },
+        },
+      });
+
+      const events = Array.from(
+        yield* Fiber.join(turnCompletedFiber).pipe(Effect.timeout("1 second")),
+      );
+      NodeAssert.equal(events.length, 1);
+      const payload = (events[0] as { payload: Record<string, unknown> }).payload;
+      const usage = payload.usage as {
+        input: number;
+        output: number;
+        cache: { read: number; write: number };
+      };
+      // Should be latest snapshot, not sum of both (100+150)
+      NodeAssert.equal(usage.input, 150);
+      NodeAssert.equal(usage.output, 30);
+      NodeAssert.equal(usage.cache.read, 15);
+      // Cost should be latest as well (deduped) — 0.002 not 0.003
+      // For deduped message, cost is replaced, so total is 0.002
+      NodeAssert.equal(payload.totalCostUsd as number, 0.002);
+      NodeAssert.equal(String((events[0] as { turnId: unknown }).turnId), String(turn.turnId));
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("fences late events from a prior turn out of the new turn's totals", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-fenced-usage");
+      const firstMessage = promiseWithResolvers<unknown>();
+      const firstIdle = promiseWithResolvers<unknown>();
+      const lateDuplicate = promiseWithResolvers<unknown>();
+      const secondMessage = promiseWithResolvers<unknown>();
+      const secondIdle = promiseWithResolvers<unknown>();
+      runtimeMock.state.subscribedEvents = [
+        firstMessage.promise,
+        firstIdle.promise,
+        lateDuplicate.promise,
+        secondMessage.promise,
+        secondIdle.promise,
+      ];
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const firstTurn = yield* adapter.sendTurn({
+        threadId,
+        input: "first turn",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "opencode/mimo-test",
+        ),
+      });
+      const firstCompletedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId && event.type === "turn.completed"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      firstMessage.resolve({
+        id: "evt-fence-1",
+        type: "message.updated",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          info: {
+            id: "msg_fence",
+            role: "assistant",
+            tokens: { input: 10, output: 5, reasoning: 1, cache: { read: 2, write: 0 } },
+            cost: 0.001,
+            modelID: "mimo-test",
+            providerID: "opencode",
+          },
+        },
+      });
+
+      yield* Effect.yieldNow;
+
+      firstIdle.resolve({
+        id: "evt-fence-idle-1",
+        type: "session.status",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          status: { type: "idle" },
+        },
+      });
+
+      const firstEvents = Array.from(
+        yield* Fiber.join(firstCompletedFiber).pipe(Effect.timeout("1 second")),
+      );
+      NodeAssert.equal(firstEvents.length, 1);
+      const firstPayload = (firstEvents[0] as { payload: Record<string, unknown> }).payload;
+      NodeAssert.equal((firstPayload.usage as { input: number }).input, 10);
+
+      const secondTurn = yield* adapter.sendTurn({
+        threadId,
+        input: "second turn",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "opencode/mimo-test",
+        ),
+      });
+      const secondCompletedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId && event.type === "turn.completed"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      // Late re-emission of the first turn's message while the second turn is
+      // active: same id, much larger totals. It must not contaminate the new
+      // turn — the contribution key is already owned by the first turn.
+      lateDuplicate.resolve({
+        id: "evt-fence-late",
+        type: "message.updated",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          info: {
+            id: "msg_fence",
+            role: "assistant",
+            tokens: { input: 100, output: 50, reasoning: 10, cache: { read: 20, write: 5 } },
+            cost: 0.009,
+            modelID: "mimo-test",
+            providerID: "opencode",
+          },
+        },
+      });
+
+      yield* Effect.yieldNow;
+
+      secondMessage.resolve({
+        id: "evt-fence-2",
+        type: "message.updated",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          info: {
+            id: "msg_fence_2",
+            role: "assistant",
+            tokens: { input: 7, output: 3, reasoning: 1, cache: { read: 1, write: 0 } },
+            cost: 0.002,
+            modelID: "mimo-test",
+            providerID: "opencode",
+          },
+        },
+      });
+
+      yield* Effect.yieldNow;
+
+      secondIdle.resolve({
+        id: "evt-fence-idle-2",
+        type: "session.status",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          status: { type: "idle" },
+        },
+      });
+
+      const secondEvents = Array.from(
+        yield* Fiber.join(secondCompletedFiber).pipe(Effect.timeout("1 second")),
+      );
+      NodeAssert.equal(secondEvents.length, 1);
+      const secondPayload = (secondEvents[0] as { payload: Record<string, unknown> }).payload;
+      const secondUsage = secondPayload.usage as { input: number; output: number };
+      // Only the second turn's own message — not 10+100+7.
+      NodeAssert.equal(secondUsage.input, 7);
+      NodeAssert.equal(secondUsage.output, 3);
+      NodeAssert.equal(secondPayload.totalCostUsd as number, 0.002);
+      NodeAssert.equal(
+        String((secondEvents[0] as { turnId: unknown }).turnId),
+        String(secondTurn.turnId),
+      );
+      NodeAssert.equal(
+        String((firstEvents[0] as { turnId: unknown }).turnId),
+        String(firstTurn.turnId),
+      );
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("keeps per-message usage when a zero-token message arrives", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
