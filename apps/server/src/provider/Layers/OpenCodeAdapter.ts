@@ -251,8 +251,8 @@ function readOpenCodeTurnTokens(value: unknown): OpenCodeTurnTokens | null {
 }
 
 function mergeOpenCodeTurnTokens(a: OpenCodeTurnTokens, b: OpenCodeTurnTokens): OpenCodeTurnTokens {
-  const totalA = a.total ?? a.input + a.output + a.cache.read + a.cache.write;
-  const totalB = b.total ?? b.input + b.output + b.cache.read + b.cache.write;
+  const totalA = a.total ?? a.input + a.output + a.reasoning + a.cache.read + a.cache.write;
+  const totalB = b.total ?? b.input + b.output + b.reasoning + b.cache.read + b.cache.write;
   const hasTotal = a.total !== undefined || b.total !== undefined;
   return {
     input: a.input + b.input,
