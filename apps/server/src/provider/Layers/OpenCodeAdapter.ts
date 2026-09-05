@@ -2882,24 +2882,6 @@ export function makeOpenCodeAdapter(
                 yield* emitOpenCodeTokenUsage(context, { turnId, raw: event });
               }
             }
-            // Per-turn contribution ledger (ported from #8918): same-id
-            // re-emissions replace that message's report, distinct ids
-            // (tool steps) each contribute; merged on turn completion into
-            // `usage`/`modelUsage`/`totalCostUsd`. Deliberately message-level
-            // only: part-level reports have unproven overlap semantics with
-            // their parent message totals, and none of the preserved cases
-            // exercise them.
-            const contributionTokens = readOpenCodeTurnTokens(info.tokens);
-            if (contributionTokens) {
-              recordOpenCodeTurnContribution(context, {
-                tokens: contributionTokens,
-                cost:
-                  typeof info.cost === "number" && Number.isFinite(info.cost) ? info.cost : null,
-                modelKey: openCodeContributionModelKey(info.modelID, info.providerID),
-                dedupeKey: typeof info.id === "string" ? `msg:${info.id}` : undefined,
-                turnId,
-              });
-            }
             const usage = context.turnTokenUsage;
             const parentMessageId =
               typeof info.parentID === "string" && info.parentID.trim().length > 0
@@ -2918,6 +2900,28 @@ export function makeOpenCodeAdapter(
                 : priorOwnership;
             if (usage) {
               usage.assistantOwnershipByMessageId.set(info.id, ownership);
+            }
+            // Per-turn contribution ledger (ported from #8918): same-id
+            // re-emissions replace that message's report, distinct ids
+            // (tool steps) each contribute; merged on turn completion into
+            // `usage`/`modelUsage`/`totalCostUsd`. Deliberately message-level
+            // only: part-level reports have unproven overlap semantics with
+            // their parent message totals, and none of the preserved cases
+            // exercise them. Late `message.updated` events from a prior turn
+            // resolve to ownership `"other"` via `parentID` above and are
+            // skipped so they cannot contaminate the current turn's totals.
+            if (ownership !== "other") {
+              const contributionTokens = readOpenCodeTurnTokens(info.tokens);
+              if (contributionTokens) {
+                recordOpenCodeTurnContribution(context, {
+                  tokens: contributionTokens,
+                  cost:
+                    typeof info.cost === "number" && Number.isFinite(info.cost) ? info.cost : null,
+                  modelKey: openCodeContributionModelKey(info.modelID, info.providerID),
+                  dedupeKey: typeof info.id === "string" ? `msg:${info.id}` : undefined,
+                  turnId,
+                });
+              }
             }
             for (const part of context.partById.values()) {
               if (part.messageID !== info.id) {
